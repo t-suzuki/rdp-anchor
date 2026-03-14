@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RDP Launcher</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--card:#1f2335;--card-hover:#262b42;
+  --border:#2a2f45;--border-light:#353b55;
+  --accent:#5b9aff;--accent-dim:#3a6fbf;--accent-bg:rgba(91,154,255,.08);
+  --green:#3dd68c;--amber:#f0a040;--red:#e85454;
+  --text:#e2e4ea;--text2:#8b90a5;--text3:#555a70;
+  --radius:10px;--radius-sm:6px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans",sans-serif;
+  --mono:"Cascadia Code","Consolas","Hiragino Kaku Gothic ProN",monospace;
+}
+html,body{height:100%;font-family:var(--font);font-size:14px;color:var(--text);background:var(--bg)}
+body{display:flex;flex-direction:column;overflow:hidden;user-select:none}
+
+/* ─ Header ─ */
+header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--surface);-webkit-app-region:drag}
+header h1{font-size:16px;font-weight:600;letter-spacing:-.02em;flex:1}
+header button{-webkit-app-region:no-drag}
+
+/* ─ Buttons ─ */
+button{font-family:var(--font);font-size:13px;cursor:pointer;border:none;border-radius:var(--radius-sm);padding:6px 14px;transition:all .15s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-dim)}
+.btn-ghost{background:transparent;color:var(--text2);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--card);color:var(--text);border-color:var(--border-light)}
+.btn-icon{background:transparent;color:var(--text2);width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius-sm)}
+.btn-icon:hover{background:var(--card);color:var(--text)}
+.btn-danger{background:transparent;color:var(--red);border:1px solid rgba(232,84,84,.25)}
+.btn-danger:hover{background:rgba(232,84,84,.1)}
+.btn-connect{background:var(--accent);color:#fff;font-size:14px;font-weight:500;padding:10px 0;width:100%;border-radius:var(--radius-sm)}
+.btn-connect:hover{background:var(--accent-dim)}
+.btn-connect.connected{background:transparent;border:1px solid var(--green);color:var(--green)}
+.btn-connect.connected:hover{background:rgba(61,214,140,.08)}
+
+/* ─ Scrollable content ─ */
+main{flex:1;overflow-y:auto;padding:20px}
+main::-webkit-scrollbar{width:6px}
+main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ─ Host cards grid ─ */
+.host-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.host-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;display:flex;flex-direction:column;gap:12px;transition:border-color .15s}
+.host-card:hover{border-color:var(--border-light)}
+.host-card .card-head{display:flex;align-items:flex-start;gap:10px}
+.host-card .card-head .info{flex:1;min-width:0}
+.host-card .card-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.host-card .card-host{font-size:12px;color:var(--text2);font-family:var(--mono);margin-top:2px}
+.host-card .card-actions{display:flex;gap:4px}
+
+/* Status dot */
+.status{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:6px}
+.status.active{background:var(--green);box-shadow:0 0 6px rgba(61,214,140,.5)}
+.status.inactive{background:var(--text3)}
+
+/* Profile selector */
+.profile-row{display:flex;align-items:center;gap:8px}
+.profile-row label{font-size:12px;color:var(--text2);white-space:nowrap}
+.profile-select{flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font)}
+.profile-select:focus{outline:none;border-color:var(--accent)}
+
+/* Monitor mini-preview */
+.monitor-preview{display:flex;gap:2px;align-items:end;padding:4px 0}
+.monitor-mini{border:1px solid var(--border-light);border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text3);background:var(--surface)}
+.monitor-mini.selected{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
+.monitor-mini.primary{border-color:var(--accent);border-width:2px}
+
+/* ─ Add host button ─ */
+.add-card{background:transparent;border:2px dashed var(--border);border-radius:var(--radius);padding:40px 16px;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text3);font-size:14px;cursor:pointer;transition:all .15s}
+.add-card:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-bg)}
+
+/* ─ Empty state ─ */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:60px 20px;color:var(--text3);text-align:center}
+.empty h2{font-size:18px;color:var(--text2);font-weight:500}
+.empty p{font-size:13px;max-width:400px;line-height:1.6}
+
+/* ─ Modal / overlay ─ */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:100;opacity:0;pointer-events:none;transition:opacity .15s}
+.overlay.open{opacity:1;pointer-events:all}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;width:min(640px,90vw);max-height:80vh;display:flex;flex-direction:column;transform:translateY(8px);transition:transform .15s}
+.overlay.open .modal{transform:translateY(0)}
+.modal-header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border)}
+.modal-header h2{flex:1;font-size:16px;font-weight:600}
+.modal-body{flex:1;overflow-y:auto;padding:20px}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border)}
+
+/* ─ Tabs ─ */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px}
+.tab{padding:8px 16px;font-size:13px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ─ Form fields ─ */
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--text2);margin-bottom:4px}
+.field input,.field select{width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font)}
+.field input:focus,.field select:focus{outline:none;border-color:var(--accent)}
+.field-row{display:flex;gap:10px}
+.field-row .field{flex:1}
+
+/* ─ Monitor layout editor ─ */
+.monitor-layout{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:12px 0;min-height:120px;display:flex;align-items:center;justify-content:center;gap:4px}
+.monitor-box{border:2px solid var(--border-light);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s;position:relative}
+.monitor-box:hover{border-color:var(--text2)}
+.monitor-box.selected{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
+.monitor-box .mon-label{font-weight:500;font-size:12px}
+.monitor-box .mon-res{font-size:10px;color:var(--text3)}
+.monitor-box .mon-primary{position:absolute;top:3px;right:5px;font-size:9px;color:var(--accent);font-weight:600}
+
+/* ─ Confirm dialog ─ */
+.confirm-body{padding:20px;text-align:center}
+.confirm-body .icon{font-size:36px;margin-bottom:12px}
+.confirm-body p{color:var(--text2);line-height:1.6}
+.confirm-body .warn{color:var(--amber);font-weight:500}
+
+/* ─ Toast ─ */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;font-size:13px;z-index:200;opacity:0;transform:translateY(10px);transition:all .3s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{border-color:var(--green);color:var(--green)}
+.toast.error{border-color:var(--red);color:var(--red)}
+
+/* ─ Color tags ─ */
+.color-tag{width:4px;border-radius:2px;align-self:stretch;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RDP Launcher</h1>
+  <button class="btn-icon" onclick="refreshAll()" title="更新">↻</button>
+  <button class="btn-ghost" onclick="openSettings()">⚙ 設定</button>
+</header>
+
+<main id="main"></main>
+
+<!-- Settings modal -->
+<div class="overlay" id="settingsOverlay" onclick="if(event.target===this)closeSettings()">
+<div class="modal">
+  <div class="modal-header">
+    <h2 id="settingsTitle">設定</h2>
+    <button class="btn-icon" onclick="closeSettings()">✕</button>
+  </div>
+  <div class="tabs" id="settingsTabs"></div>
+  <div class="modal-body" id="settingsBody"></div>
+  <div class="modal-footer" id="settingsFooter"></div>
+</div>
+</div>
+
+<!-- Confirm dialog -->
+<div class="overlay" id="confirmOverlay">
+<div class="modal" style="width:min(440px,85vw)">
+  <div class="modal-body confirm-body" id="confirmBody"></div>
+  <div class="modal-footer" id="confirmFooter"></div>
+</div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── Tauri API ──────────────────────────────────────────────────────
+const invoke = window.__TAURI__?.core?.invoke ?? (async (cmd, args) => {
+  console.warn(`[mock] invoke(${cmd})`, args);
+  // Dev fallback with dummy data
+  if (cmd === 'get_state') return {
+    config: { monitors: {}, profiles: {}, hosts: [] },
+    monitors: [
+      { mstsc_id: 0, left: -1920, top: 0, width: 1920, height: 1080, is_primary: false },
+      { mstsc_id: 1, left: 0, top: 0, width: 2560, height: 1440, is_primary: true },
+      { mstsc_id: 2, left: 2560, top: 0, width: 1920, height: 1080, is_primary: false },
+    ],
+    active_sessions: [],
+  };
+  return null;
+});
+
+// ─── State ──────────────────────────────────────────────────────────
+let S = {
+  config: { monitors: {}, profiles: {}, hosts: [] },
+  liveMonitors: [],
+  activeSessions: [],
+  settingsTab: 'monitors',
+};
+
+// ─── Init ───────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  await refreshAll();
+});
+
+async function refreshAll() {
+  try {
+    const state = await invoke('get_state');
+    S.config = state.config;
+    S.liveMonitors = state.monitors;
+    S.activeSessions = state.active_sessions;
+  } catch (e) {
+    console.error(e);
+  }
+  renderMain();
+}
+
+// ─── Toast ──────────────────────────────────────────────────────────
+function toast(msg, type = 'success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast show ${type}`;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.className = 'toast', 2500);
+}
+
+// ─── Main view ──────────────────────────────────────────────────────
+function renderMain() {
+  const el = document.getElementById('main');
+  const hosts = S.config.hosts || [];
+
+  if (hosts.length === 0 && Object.keys(S.config.monitors).length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <h2>RDP Launcher へようこそ</h2>
+        <p>まずモニターを検出して、接続先を追加しましょう。</p>
+        <button class="btn-primary" onclick="openSettings('monitors')" style="padding:10px 28px;font-size:14px">
+          モニターを検出して始める
+        </button>
+      </div>`;
+    return;
+  }
+
+  if (hosts.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <h2>接続先が未登録です</h2>
+        <p>RDPファイルを指定してホストを追加してください。</p>
+        <button class="btn-primary" onclick="addHostDialog()" style="padding:10px 28px;font-size:14px">
+          + ホストを追加
+        </button>
+      </div>`;
+    return;
+  }
+
+  const profileOptions = Object.entries(S.config.profiles || {})
+    .map(([k, v]) => `<option value="${esc(k)}">${esc(v.name)}</option>`).join('');
+
+  let cards = hosts.map(h => {
+    const rdpHost = h.rdp_file.split(/[/\\]/).pop().replace('.rdp', '');
+    const sess = S.activeSessions.find(s =>
+      s.hostname.toLowerCase().includes(h.name.toLowerCase()) ||
+      h.name.toLowerCase().includes(s.hostname.toLowerCase())
+    );
+    const isActive = !!sess;
+    const profile = S.config.profiles?.[h.default_profile];
+    const colorStyle = h.color ? `background:${h.color}` : `background:var(--accent)`;
+
+    return `
+    <div class="host-card">
+      <div class="card-head">
+        <div class="color-tag" style="${colorStyle}"></div>
+        <div class="status ${isActive ? 'active' : 'inactive'}"></div>
+        <div class="info">
+          <div class="card-name">${esc(h.name)}</div>
+          <div class="card-host">${esc(rdpHost)}</div>
+        </div>
+        <div class="card-actions">
+          <button class="btn-icon" onclick="editHostDialog('${esc(h.id)}')" title="編集">✎</button>
+          <button class="btn-icon" onclick="deleteHost('${esc(h.id)}','${esc(h.name)}')" title="削除">🗑</button>
+        </div>
+      </div>
+      ${renderMonitorPreview(h.default_profile)}
+      <div class="profile-row">
+        <label>Profile:</label>
+        <select class="profile-select" id="profile-${esc(h.id)}">
+          ${profileOptions}
+        </select>
+      </div>
+      <button class="btn-connect ${isActive ? 'connected' : ''}"
+              onclick="doConnect('${esc(h.id)}')">
+        ${isActive ? '● 接続中 — 再接続' : '接続'}
+      </button>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="host-grid">
+      ${cards}
+      <div class="add-card" onclick="addHostDialog()">+ ホストを追加</div>
+    </div>`;
+
+  // Set default profile selection
+  hosts.forEach(h => {
+    const sel = document.getElementById(`profile-${h.id}`);
+    if (sel) sel.value = h.default_profile;
+  });
+}
+
+function renderMonitorPreview(profileId) {
+  const profile = S.config.profiles?.[profileId];
+  if (!profile || S.liveMonitors.length === 0) return '';
+
+  const allMons = Object.entries(S.config.monitors || {});
+  if (allMons.length === 0) return '';
+
+  // Sort by left coordinate
+  const sorted = allMons.sort((a, b) => a[1].left - b[1].left);
+  const maxW = Math.max(...sorted.map(([, m]) => m.width));
+
+  const boxes = sorted.map(([key, m]) => {
+    const isSelected = profile.monitor_ids.includes(key);
+    const isPrimary = key === profile.primary;
+    const w = Math.max(30, Math.round(m.width / maxW * 60));
+    const h = Math.max(18, Math.round(m.height / maxW * 60));
+    return `<div class="monitor-mini ${isSelected ? 'selected' : ''} ${isPrimary ? 'primary' : ''}"
+                 style="width:${w}px;height:${h}px"
+                 title="${m.name} (${m.width}x${m.height})${isPrimary ? ' [PRIMARY]' : ''}">
+              ${isPrimary ? '★' : ''}
+            </div>`;
+  }).join('');
+
+  return `<div class="monitor-preview">${boxes}</div>`;
+}
+
+// ─── Connect flow ───────────────────────────────────────────────────
+async function doConnect(hostId) {
+  const sel = document.getElementById(`profile-${hostId}`);
+  const host = S.config.hosts.find(h => h.id === hostId);
+  const selectedProfile = sel?.value;
+  // Only send override if user explicitly changed from default
+  const profileId = (selectedProfile && selectedProfile !== host?.default_profile) ? selectedProfile : undefined;
+
+  try {
+    // Preflight check
+    const result = await invoke('preflight_connect', {
+      hostId,
+      profileId: profileId || null,
+    });
+
+    if (result.needs_confirm) {
+      showConfirm(
+        '⚠',
+        result.message,
+        '再接続する',
+        async () => {
+          try {
+            const msg = await invoke('connect', { hostId, profileId: profileId || null });
+            toast(msg);
+            setTimeout(refreshAll, 2000);
+          } catch (e) { toast(String(e), 'error'); }
+        }
+      );
+    } else {
+      const msg = await invoke('connect', { hostId, profileId: profileId || null });
+      toast(msg);
+      setTimeout(refreshAll, 2000);
+    }
+  } catch (e) {
+    toast(String(e), 'error');
+  }
+}
+
+// ─── Confirm dialog ─────────────────────────────────────────────────
+function showConfirm(icon, message, actionLabel, onConfirm) {
+  document.getElementById('confirmBody').innerHTML = `
+    <div class="icon">${icon}</div>
+    <p class="warn">${esc(message)}</p>`;
+  document.getElementById('confirmFooter').innerHTML = `
+    <button class="btn-ghost" onclick="closeConfirm()">キャンセル</button>
+    <button class="btn-danger" id="confirmAction">${esc(actionLabel)}</button>`;
+  document.getElementById('confirmAction').onclick = () => { closeConfirm(); onConfirm(); };
+  document.getElementById('confirmOverlay').classList.add('open');
+}
+function closeConfirm() { document.getElementById('confirmOverlay').classList.remove('open'); }
+
+// ─── Settings ───────────────────────────────────────────────────────
+function openSettings(tab) {
+  S.settingsTab = tab || 'monitors';
+  renderSettings();
+  document.getElementById('settingsOverlay').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settingsOverlay').classList.remove('open');
+  renderMain();
+}
+
+function renderSettings() {
+  const tabs = ['monitors', 'profiles'];
+  const labels = { monitors: 'モニター', profiles: 'プロファイル' };
+  document.getElementById('settingsTabs').innerHTML = tabs.map(t =>
+    `<div class="tab ${S.settingsTab === t ? 'active' : ''}" onclick="S.settingsTab='${t}';renderSettings()">${labels[t]}</div>`
+  ).join('');
+
+  if (S.settingsTab === 'monitors') renderMonitorsTab();
+  else renderProfilesTab();
+}
+
+// ── Monitors tab ──
+async function renderMonitorsTab() {
+  const body = document.getElementById('settingsBody');
+  const monitors = S.config.monitors || {};
+  const entries = Object.entries(monitors).sort((a, b) => a[1].left - b[1].left);
+
+  let liveHTML = '';
+  if (S.liveMonitors.length > 0) {
+    liveHTML = `<div style="margin-bottom:16px">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">現在検出中のモニター:</div>
+      <div class="monitor-layout">${renderMonitorBoxes(S.liveMonitors)}</div>
+    </div>`;
+  }
+
+  let defsHTML = '';
+  if (entries.length > 0) {
+    defsHTML = entries.map(([key, m]) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:1">
+          <div style="font-weight:500">${esc(m.name)}</div>
+          <div style="font-size:11px;color:var(--text3);font-family:var(--mono)">
+            ${esc(key)} · (${m.left}, ${m.top}) ${m.width}×${m.height}
+          </div>
+        </div>
+        <button class="btn-icon" onclick="editMonitorDef('${esc(key)}')" title="編集">✎</button>
+      </div>
+    `).join('');
+  } else {
+    defsHTML = `<p style="color:var(--text3);text-align:center;padding:20px">
+      モニター定義がありません。「自動検出」で作成してください。</p>`;
+  }
+
+  body.innerHTML = `
+    ${liveHTML}
+    <div style="font-size:13px;font-weight:500;margin-bottom:8px">登録済みモニター定義</div>
+    ${defsHTML}`;
+
+  document.getElementById('settingsFooter').innerHTML = `
+    <button class="btn-primary" onclick="doAutoDetect()">🔍 自動検出</button>`;
+}
+
+function renderMonitorBoxes(monitors) {
+  const sorted = [...monitors].sort((a, b) => a.left - b.left);
+  const maxW = Math.max(...sorted.map(m => m.width));
+  return sorted.map(m => {
+    const w = Math.max(50, Math.round(m.width / maxW * 120));
+    const h = Math.max(35, Math.round(m.height / maxW * 120));
+    return `<div class="monitor-box" style="width:${w}px;height:${h}px">
+      <div class="mon-label">ID ${m.mstsc_id}</div>
+      <div class="mon-res">${m.width}×${m.height}</div>
+      ${m.is_primary ? '<div class="mon-primary">P</div>' : ''}
+    </div>`;
+  }).join('');
+}
+
+async function doAutoDetect() {
+  try {
+    const defs = await invoke('auto_detect_monitors');
+    S.config.monitors = defs;
+    toast('モニターを検出しました');
+    renderSettings();
+  } catch (e) { toast(String(e), 'error'); }
+}
+
+function editMonitorDef(key) {
+  const m = S.config.monitors[key];
+  if (!m) return;
+  const body = document.getElementById('settingsBody');
+  body.innerHTML = `
+    <h3 style="font-size:14px;margin-bottom:12px">モニター定義の編集</h3>
+    <div class="field"><label>キー (ID)</label><input id="em-key" value="${esc(key)}" readonly style="opacity:.6"></div>
+    <div class="field"><label>表示名</label><input id="em-name" value="${esc(m.name)}"></div>
+    <div class="field-row">
+      <div class="field"><label>Left</label><input id="em-left" type="number" value="${m.left}"></div>
+      <div class="field"><label>Top</label><input id="em-top" type="number" value="${m.top}"></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>幅</label><input id="em-w" type="number" value="${m.width}"></div>
+      <div class="field"><label>高さ</label><input id="em-h" type="number" value="${m.height}"></div>
+    </div>`;
+  document.getElementById('settingsFooter').innerHTML = `
+    <button class="btn-ghost" onclick="renderSettings()">戻る</button>
+    <button class="btn-primary" onclick="saveMonitorDef('${esc(key)}')">保存</button>`;
+}
+
+async function saveMonitorDef(key) {
+  S.config.monitors[key] = {
+    name: document.getElementById('em-name').value,
+    left: parseInt(document.getElementById('em-left').value),
+    top: parseInt(document.getElementById('em-top').value),
+    width: parseInt(document.getElementById('em-w').value),
+    height: parseInt(document.getElementById('em-h').value),
+  };
+  try {
+    await invoke('save_monitors', { monitors: S.config.monitors });
+    toast('保存しました');
+    renderSettings();
+  } catch (e) { toast(String(e), 'error'); }
+}
+
+// ── Profiles tab ──
+function renderProfilesTab() {
+  const body = document.getElementById('settingsBody');
+  const profiles = Object.entries(S.config.profiles || {});
+
+  let html = '';
+  if (profiles.length > 0) {
+    html = profiles.map(([key, p]) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:1">
+          <div style="font-weight:500">${esc(p.name)}</div>
+          <div style="font-size:11px;color:var(--text3)">
+            Monitors: ${p.monitor_ids.join(', ')} · Primary: ${esc(p.primary)}
+          </div>
+        </div>
+        <button class="btn-icon" onclick="editProfile('${esc(key)}')" title="編集">✎</button>
+        <button class="btn-icon" onclick="doDeleteProfile('${esc(key)}')" title="削除">🗑</button>
+      </div>
+    `).join('');
+  } else {
+    html = `<p style="color:var(--text3);text-align:center;padding:20px">
+      プロファイルがありません。まずモニターを検出してからプロファイルを作成してください。</p>`;
+  }
+
+  body.innerHTML = html;
+  document.getElementById('settingsFooter').innerHTML = `
+    <button class="btn-primary" onclick="editProfile(null)">+ 新しいプロファイル</button>`;
+}
+
+function editProfile(key) {
+  const profile = key ? S.config.profiles[key] : { name: '', monitor_ids: [], primary: '' };
+  const monEntries = Object.entries(S.config.monitors || {}).sort((a, b) => a[1].left - b[1].left);
+
+  if (monEntries.length === 0) {
+    toast('先にモニターを検出してください', 'error');
+    return;
+  }
+
+  const body = document.getElementById('settingsBody');
+  const isNew = !key;
+  const editKey = key || `profile-${Date.now()}`;
+
+  body.innerHTML = `
+    <h3 style="font-size:14px;margin-bottom:12px">${isNew ? '新しいプロファイル' : 'プロファイルの編集'}</h3>
+    <div class="field">
+      <label>プロファイル名</label>
+      <input id="ep-name" value="${esc(profile.name)}" placeholder="例: 左2画面">
+    </div>
+    ${isNew ? `<div class="field"><label>キー (ID)</label><input id="ep-key" value="${esc(editKey)}" placeholder="英数字のID"></div>` : ''}
+    <div style="font-size:12px;color:var(--text2);margin:12px 0 6px">使用するモニターを選択 (クリックで選択/解除、ダブルクリックでPrimary):</div>
+    <div class="monitor-layout" id="ep-layout"></div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">
+      選択中: <span id="ep-selected">${profile.monitor_ids.join(', ') || 'なし'}</span>
+      &nbsp;|&nbsp; Primary: <span id="ep-primary">${profile.primary || 'なし'}</span>
+    </div>`;
+
+  // Render interactive monitor boxes
+  const layout = document.getElementById('ep-layout');
+  const state = { ids: [...profile.monitor_ids], primary: profile.primary };
+
+  monEntries.forEach(([mkey, m]) => {
+    const maxW = Math.max(...monEntries.map(([, v]) => v.width));
+    const w = Math.max(60, Math.round(m.width / maxW * 140));
+    const h = Math.max(40, Math.round(m.height / maxW * 140));
+    const box = document.createElement('div');
+    box.className = 'monitor-box' + (state.ids.includes(mkey) ? ' selected' : '');
+    box.style.cssText = `width:${w}px;height:${h}px`;
+    box.innerHTML = `
+      <div class="mon-label">${esc(m.name)}</div>
+      <div class="mon-res">${m.width}×${m.height}</div>
+      ${mkey === state.primary ? '<div class="mon-primary">PRIMARY</div>' : ''}`;
+    box.onclick = () => {
+      const idx = state.ids.indexOf(mkey);
+      if (idx >= 0) { state.ids.splice(idx, 1); if (state.primary === mkey) state.primary = state.ids[0] || ''; }
+      else state.ids.push(mkey);
+      updateProfileEditor(monEntries, state, layout);
+    };
+    box.ondblclick = () => {
+      if (!state.ids.includes(mkey)) state.ids.push(mkey);
+      state.primary = mkey;
+      updateProfileEditor(monEntries, state, layout);
+    };
+    layout.appendChild(box);
+  });
+
+  document.getElementById('settingsFooter').innerHTML = `
+    <button class="btn-ghost" onclick="renderSettings()">戻る</button>
+    <button class="btn-primary" onclick="saveProfile('${esc(isNew ? '' : key)}')">保存</button>`;
+
+  // Store state reference for save
+  layout._state = state;
+}
+
+function updateProfileEditor(monEntries, state, layout) {
+  layout.querySelectorAll('.monitor-box').forEach((box, i) => {
+    const mkey = monEntries[i][0];
+    box.className = 'monitor-box' + (state.ids.includes(mkey) ? ' selected' : '');
+    const primaryEl = box.querySelector('.mon-primary');
+    if (mkey === state.primary) {
+      if (!primaryEl) { const d = document.createElement('div'); d.className = 'mon-primary'; d.textContent = 'PRIMARY'; box.appendChild(d); }
+    } else {
+      if (primaryEl) primaryEl.remove();
+    }
+  });
+  document.getElementById('ep-selected').textContent = state.ids.join(', ') || 'なし';
+  document.getElementById('ep-primary').textContent = state.primary || 'なし';
+}
+
+async function saveProfile(existingKey) {
+  const name = document.getElementById('ep-name').value.trim();
+  if (!name) { toast('名前を入力してください', 'error'); return; }
+
+  const key = existingKey || document.getElementById('ep-key')?.value.trim() || `p-${Date.now()}`;
+  const layout = document.getElementById('ep-layout');
+  const state = layout._state;
+
+  if (state.ids.length === 0) { toast('モニターを1つ以上選択してください', 'error'); return; }
+  if (!state.primary) state.primary = state.ids[0];
+
+  const profile = { name, monitor_ids: state.ids, primary: state.primary };
+
+  try {
+    await invoke('save_profile', { id: key, profile });
+    S.config.profiles = S.config.profiles || {};
+    S.config.profiles[key] = profile;
+    toast('保存しました');
+    renderSettings();
+  } catch (e) { toast(String(e), 'error'); }
+}
+
+async function doDeleteProfile(key) {
+  showConfirm('🗑', `プロファイル "${S.config.profiles[key]?.name}" を削除しますか？`, '削除', async () => {
+    try {
+      await invoke('delete_profile', { id: key });
+      delete S.config.profiles[key];
+      renderSettings();
+    } catch (e) { toast(String(e), 'error'); }
+  });
+}
+
+// ─── Host management ────────────────────────────────────────────────
+async function addHostDialog() {
+  const profiles = Object.entries(S.config.profiles || {});
+  if (profiles.length === 0) {
+    toast('先にプロファイルを作成してください', 'error');
+    openSettings('profiles');
+    return;
+  }
+  showHostEditor(null);
+}
+
+function editHostDialog(hostId) {
+  const host = S.config.hosts.find(h => h.id === hostId);
+  if (host) showHostEditor(host);
+}
+
+function showHostEditor(host) {
+  const isNew = !host;
+  const h = host || { id: `host-${Date.now()}`, name: '', rdp_file: '', default_profile: '', color: '#5b9aff' };
+  const profiles = Object.entries(S.config.profiles || {});
+
+  const body = document.getElementById('settingsBody');
+  const profileOpts = profiles.map(([k, v]) =>
+    `<option value="${esc(k)}" ${k === h.default_profile ? 'selected' : ''}>${esc(v.name)}</option>`
+  ).join('');
+
+  const colors = ['#5b9aff','#3dd68c','#f0a040','#e85454','#c084fc','#f472b6','#38bdf8','#a3a3a3'];
+  const colorPicker = colors.map(c =>
+    `<div onclick="document.getElementById('eh-color').value='${c}';this.parentNode.querySelectorAll('div').forEach(d=>d.style.outline='');this.style.outline='2px solid var(--text)'"
+         style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;${c===h.color?'outline:2px solid var(--text)':''}"></div>`
+  ).join('');
+
+  document.getElementById('settingsTitle').textContent = isNew ? 'ホストを追加' : 'ホストを編集';
+  document.getElementById('settingsTabs').innerHTML = '';
+  body.innerHTML = `
+    <div class="field"><label>表示名</label><input id="eh-name" value="${esc(h.name)}" placeholder="例: 開発サーバー"></div>
+    <div class="field">
+      <label>RDPファイル</label>
+      <div style="display:flex;gap:8px">
+        <input id="eh-rdp" value="${esc(h.rdp_file)}" placeholder="C:\\Users\\...\\server.rdp" style="flex:1">
+        <button class="btn-ghost" onclick="browseRdp()">参照...</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>デフォルトプロファイル</label>
+      <select id="eh-profile">${profileOpts}</select>
+    </div>
+    <div class="field">
+      <label>カラータグ</label>
+      <input id="eh-color" type="hidden" value="${esc(h.color || '#5b9aff')}">
+      <div style="display:flex;gap:8px;margin-top:4px">${colorPicker}</div>
+    </div>`;
+
+  document.getElementById('settingsFooter').innerHTML = `
+    <button class="btn-ghost" onclick="closeSettings()">キャンセル</button>
+    <button class="btn-primary" onclick="saveHostFromEditor('${esc(h.id)}')">保存</button>`;
+
+  document.getElementById('settingsOverlay').classList.add('open');
+}
+
+async function browseRdp() {
+  try {
+    const info = await invoke('browse_rdp_file');
+    if (info) {
+      document.getElementById('eh-rdp').value = info.path;
+      if (!document.getElementById('eh-name').value) {
+        document.getElementById('eh-name').value = info.host;
+      }
+    }
+  } catch (e) { toast(String(e), 'error'); }
+}
+
+async function saveHostFromEditor(hostId) {
+  const host = {
+    id: hostId,
+    name: document.getElementById('eh-name').value.trim(),
+    rdp_file: document.getElementById('eh-rdp').value.trim(),
+    default_profile: document.getElementById('eh-profile').value,
+    color: document.getElementById('eh-color').value,
+  };
+  if (!host.name) { toast('表示名を入力してください', 'error'); return; }
+  if (!host.rdp_file) { toast('RDPファイルを指定してください', 'error'); return; }
+
+  try {
+    await invoke('save_host', { host });
+    const idx = S.config.hosts.findIndex(h => h.id === hostId);
+    if (idx >= 0) S.config.hosts[idx] = host;
+    else S.config.hosts.push(host);
+    closeSettings();
+    toast('保存しました');
+  } catch (e) { toast(String(e), 'error'); }
+}
+
+async function deleteHost(id, name) {
+  showConfirm('🗑', `"${name}" を削除しますか？`, '削除', async () => {
+    try {
+      await invoke('delete_host', { id });
+      S.config.hosts = S.config.hosts.filter(h => h.id !== id);
+      renderMain();
+    } catch (e) { toast(String(e), 'error'); }
+  });
+}
+
+// ─── Keyboard shortcuts ─────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (document.getElementById('confirmOverlay').classList.contains('open')) {
+      closeConfirm();
+    } else if (document.getElementById('settingsOverlay').classList.contains('open')) {
+      closeSettings();
+    }
+  }
+  // Ctrl+R or F5 to refresh
+  if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
+    e.preventDefault();
+    refreshAll();
+  }
+});
+
+// ─── Auto-refresh sessions every 10s ────────────────────────────────
+setInterval(async () => {
+  try {
+    const sessions = await invoke('refresh_sessions');
+    if (JSON.stringify(sessions) !== JSON.stringify(S.activeSessions)) {
+      S.activeSessions = sessions;
+      renderMain();
+    }
+  } catch (_) {}
+}, 10000);
+
+// ─── Utility ────────────────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+</script>
+</body>
+</html>
