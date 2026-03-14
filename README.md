@@ -109,6 +109,15 @@ cargo tauri build
 - 実行ファイル: `target/release/rdp-launcher.exe`
 - MSIインストーラー: `target/release/bundle/msi/RDP Launcher_0.0.1_x64_ja-JP.msi`
 
+ZIP配布版を作成する場合:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package-zip.ps1
+```
+
+- ZIP: `target/release/bundle/zip/RDP-Launcher_0.0.1_x64.zip`
+- 内容: `rdp-launcher.exe`, `README.md`
+
 ### 開発モード
 
 ```bash
