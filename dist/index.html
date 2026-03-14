@@ -136,6 +136,7 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
 <header>
   <h1>RDP Launcher</h1>
+  <span id="fallbackBadge" style="display:none;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--amber);color:#000;font-weight:600;white-space:nowrap" title="mstsc BP capture failed. Monitor IDs may be incorrect after reboot.">ID fallback</span>
   <button class="btn-icon" onclick="refreshAll()" title="更新">&#x21bb;</button>
   <button class="btn-ghost" onclick="openSettings()">&#x2699; 設定</button>
 </header>
@@ -210,6 +211,7 @@ async function refreshAll() {
     S.config = state.config;
     S.liveMonitors = state.monitors;
     S.activeSessions = state.active_sessions;
+    document.getElementById('fallbackBadge').style.display = state.mstsc_id_fallback ? '' : 'none';
 
     // Auto-detect monitors on first run
     if (Object.keys(S.config.monitors).length === 0 && S.liveMonitors.length > 0) {
@@ -539,10 +541,10 @@ function renderAdvancedTab() {
   const body = document.getElementById('settingsBody');
   body.innerHTML = `
     <div style="margin-bottom:16px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">mstsc /l キャプチャテスト</div>
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">mstsc /l サイレントキャプチャテスト</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
-        MessageBoxW フックを使って mstsc /l の出力をサイレントキャプチャします。<br>
-        接続時に使用されるモニターIDの正確性を確認できます。
+        DialogBoxIndirectParamW BPを使って mstsc /l の出力をサイレントキャプチャします。<br>
+        ダイアログ・音なしでモニターIDを取得し、正確性を確認できます。
       </p>
       <button class="btn-primary" id="advTestBtn" onclick="runMstscCaptureTest()">テスト実行</button>
     </div>

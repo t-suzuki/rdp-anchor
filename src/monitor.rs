@@ -22,14 +22,16 @@ pub fn get_current_monitors() -> Result<Vec<LiveMonitor>, String> {
 
 /// Get monitors with verified mstsc IDs for use during connect/preflight.
 /// Falls back to EnumDisplayMonitors IDs if the hook approach fails.
-pub fn get_monitors_for_connect() -> Result<Vec<LiveMonitor>, String> {
+/// Returns (monitors_with_correct_ids, used_fallback).
+/// `used_fallback` is true when BP capture failed and EnumDisplayMonitors IDs are used as-is.
+pub fn get_monitors_for_connect() -> Result<(Vec<LiveMonitor>, bool), String> {
     let mut monitors = enumerate_display_monitors()?;
     populate_device_names(&mut monitors);
 
     #[cfg(target_os = "windows")]
     {
         match capture_mstsc_silent() {
-            Ok((_raw_text, mstsc_monitors)) => {
+            Ok((_raw_text, mstsc_monitors, used_fallback)) => {
                 // Merge mstsc IDs into our monitors by matching coordinates
                 for mon in &mut monitors {
                     if let Some(mstsc_mon) = mstsc_monitors.iter().find(|m| {
@@ -41,14 +43,17 @@ pub fn get_monitors_for_connect() -> Result<Vec<LiveMonitor>, String> {
                         mon.mstsc_id = mstsc_mon.mstsc_id;
                     }
                 }
+                return Ok((monitors, used_fallback));
             }
             Err(_) => {
                 // Fall back to EnumDisplayMonitors IDs (best effort)
+                return Ok((monitors, true));
             }
         }
     }
 
-    Ok(monitors)
+    #[cfg(not(target_os = "windows"))]
+    Ok((monitors, false))
 }
 
 /// Diagnostic result with detailed logs.
@@ -59,7 +64,7 @@ pub struct CaptureResult {
     pub logs: Vec<String>,
 }
 
-/// Diagnostic: run mstsc /l capture and return raw text + parsed monitors + logs.
+/// Test: run mstsc /l BP capture and return raw text + parsed monitors.
 pub fn test_mstsc_capture() -> Result<CaptureResult, String> {
     #[cfg(not(target_os = "windows"))]
     {
@@ -68,7 +73,28 @@ pub fn test_mstsc_capture() -> Result<CaptureResult, String> {
 
     #[cfg(target_os = "windows")]
     {
-        capture_debug_target("mstsc.exe /l")
+        let start = std::time::Instant::now();
+        let mut logs = Vec::new();
+        match capture_mstsc_bp(&mut logs) {
+            Ok((text, monitors)) => {
+                let elapsed = start.elapsed();
+                logs.insert(0, format!("BP capture succeeded in {:.1}s", elapsed.as_secs_f64()));
+                logs.push(format!("Parsed {} monitors", monitors.len()));
+                Ok(CaptureResult {
+                    logs,
+                    raw_text: text,
+                    monitors,
+                })
+            }
+            Err(e) => {
+                logs.insert(0, format!("BP capture FAILED: {e}"));
+                Ok(CaptureResult {
+                    logs,
+                    raw_text: String::new(),
+                    monitors: Vec::new(),
+                })
+            }
+        }
     }
 }
 
@@ -131,6 +157,7 @@ fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
     const CTX_RDX: usize = 0x88;
     const CTX_RSP: usize = 0x98;
     const CTX_R8: usize = 0xB8;
+    const CTX_R9: usize = 0xC0;
     const CTX_RIP: usize = 0xF8;
 
     fn ctx_u64(ctx: &ContextAmd64, off: usize) -> u64 {
@@ -170,17 +197,30 @@ fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
 
     let mut targets: Vec<BpTarget> = Vec::new();
 
-    // Functions to breakpoint on
-    let names: &[(&str, &str)] = &[
-        ("CreateWindowExW", "CreateWindowExW"),
-        ("DialogBoxIndirectParamW", "DialogBoxIndirectParamW"),
-        ("DialogBoxIndirectParamA", "DialogBoxIndirectParamA"),
-        ("DialogBoxParamW", "DialogBoxParamW"),
+    // user32.dll functions to breakpoint on
+    let user32_syms: &[&str] = &[
+        "CreateWindowExW",
+        "DialogBoxParamW",
+        "DialogBoxIndirectParamW",
+        "MessageBoxW",
+        "MessageBoxExW",
+        "MessageBoxIndirectW",
     ];
-    for &(display, sym) in names {
-        if let Some(t) = resolve(display, user32, sym) {
+    for &sym in user32_syms {
+        if let Some(t) = resolve(sym, user32, sym) {
             logs.push(format!("{} @ 0x{:x}", t.name, t.addr));
             targets.push(t);
+        }
+    }
+
+    // comctl32.dll functions to breakpoint on
+    if let Ok(comctl32) = unsafe { LoadLibraryW(w!("comctl32.dll")) } {
+        let comctl32_syms: &[&str] = &["TaskDialog", "TaskDialogIndirect"];
+        for &sym in comctl32_syms {
+            if let Some(t) = resolve(sym, comctl32, sym) {
+                logs.push(format!("{} @ 0x{:x}", t.name, t.addr));
+                targets.push(t);
+            }
         }
     }
 
@@ -210,11 +250,9 @@ fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
     .map_err(|e| format!("CreateProcessW: {e}"))?;
 
     let h_process = pi.hProcess;
-    let _guard = ProcessGuard {
-        h_process,
-        h_thread: pi.hThread,
-    };
-    logs.push(format!("mstsc PID={}", pi.dwProcessId));
+    let h_thread = pi.hThread;
+    let diag_pid = pi.dwProcessId;
+    logs.push(format!("mstsc PID={}", diag_pid));
 
     // Breakpoint state
     let mut single_step_tid: Option<u32> = None;
@@ -258,11 +296,37 @@ fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
                 let base = unsafe { event.u.LoadDll.lpBaseOfDll } as usize;
                 // Read DLL name from debug info
                 let name = read_dll_name_from_event(h_process, unsafe { &event.u.LoadDll });
-                modules.push((base, if name.is_empty() { format!("dll_{}", dll_count) } else { name }));
+                let dll_name = if name.is_empty() { format!("dll_{}", dll_count) } else { name };
+                modules.push((base, dll_name.clone()));
                 unsafe {
                     let h = event.u.LoadDll.hFile;
                     if !h.is_invalid() {
                         let _ = CloseHandle(h);
+                    }
+                }
+                // When a DLL loads, try to set any pending breakpoints that weren't set yet
+                if initial_bp {
+                    for t in targets.iter_mut() {
+                        if !t.active {
+                            // Check if this target's address falls within the newly loaded DLL
+                            // (heuristic: addr >= base and within 64MB)
+                            let addr = t.addr;
+                            if addr >= base && addr - base < 0x400_0000 {
+                                let mut orig = [0u8; 1];
+                                if read_remote(h_process, addr, &mut orig) {
+                                    t.orig_byte = orig[0];
+                                    let bp_byte = [0xCCu8; 1];
+                                    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+                                    unsafe {
+                                        let _ = VirtualProtectEx(h_process, addr as *const _, 1, PAGE_EXECUTE_READWRITE, &mut old_prot);
+                                        let _ = WriteProcessMemory(h_process, addr as *mut _, bp_byte.as_ptr() as *const _, 1, None);
+                                        let _ = VirtualProtectEx(h_process, addr as *const _, 1, old_prot, &mut old_prot);
+                                    }
+                                    t.active = true;
+                                    logs.push(format!("BP set on {} (late, after {} loaded)", t.name, dll_name));
+                                }
+                            }
+                        }
                     }
                 }
                 DBG_CONTINUE
@@ -358,19 +422,213 @@ fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
                                     }
                                 } else {
                                     // Dialog function hit! Log with full stack trace
-                                    // RCX=hInstance/hWndOwner, RDX=template/name, R8=dialog/parent, R9=proc
+                                    let r9 = ctx_u64(&ctx, CTX_R9);
+                                    // Read 5th arg from [RSP+0x28]
+                                    let mut arg5_buf = [0u8; 8];
+                                    let _ = read_remote(h_process, (rsp + 0x28) as usize, &mut arg5_buf);
+                                    let arg5 = u64::from_le_bytes(arg5_buf);
+
                                     logs.push(format!(
-                                        "[{}] >>> {} #{}: RCX=0x{:x} RDX=0x{:x} R8=0x{:x} ret=0x{:x}({})",
-                                        event_count, bp_name, bp_hit, rcx, rdx, r8, ret_addr, ret_mod
+                                        "[{}] >>> {} #{}: RCX=0x{:x} RDX=0x{:x} R8=0x{:x} R9=0x{:x} [RSP+0x28]=0x{:x} ret=0x{:x}({})",
+                                        event_count, bp_name, bp_hit, rcx, rdx, r8, r9, arg5, ret_addr, ret_mod
                                     ));
+
+                                    // Try to read potential wide string args
+                                    // TaskDialog: (hWndOwner, hInstance, pszWindowTitle, pszMainInstruction, pszContent, ...)
+                                    //   RCX=hWndOwner RDX=hInstance R8=pszWindowTitle R9=pszMainInstruction [RSP+0x28]=pszContent
+                                    // MessageBoxW: (hWnd, lpText, lpCaption, uType)
+                                    //   RCX=hWnd RDX=lpText R8=lpCaption
+                                    for (label, ptr) in [
+                                        ("RDX as wstr", rdx),
+                                        ("R8 as wstr", r8),
+                                        ("R9 as wstr", r9),
+                                        ("[RSP+0x28] as wstr", arg5),
+                                    ] {
+                                        if ptr > 0x10000 {
+                                            let s = read_remote_wstr(h_process, ptr as usize, 512);
+                                            if !s.starts_with("<read fail") && !s.is_empty() {
+                                                logs.push(format!("    {} = \"{}\"", label, s));
+                                            }
+                                        }
+                                    }
+
                                     // Full stack dump for dialog calls
-                                    let mut stack_buf = [0u8; 256]; // 32 frames
+                                    let mut stack_buf = [0u8; 512]; // 64 slots
                                     let _ = read_remote(h_process, rsp as usize, &mut stack_buf);
-                                    for i in 0..32 {
+                                    for i in 0..64 {
                                         let addr = u64::from_le_bytes(stack_buf[i*8..(i+1)*8].try_into().unwrap());
                                         let m = find_module(addr as usize, &modules);
                                         if !m.is_empty() {
                                             logs.push(format!("    RSP+0x{:02x}: 0x{:016x} {}", i*8, addr, m));
+                                        }
+                                    }
+
+                                    // For DialogBoxIndirectParamW: deep scan for TASKDIALOGCONFIG
+                                    // Strategy:
+                                    //   1. Collect all unique heap pointers from the stack
+                                    //   2. For each heap pointer, try reading as TASKDIALOGCONFIG (check cbSize)
+                                    //   3. Also scan dwInitParam (5th arg) structure for embedded pointers
+                                    //   4. For each heap pointer, try reading at offset 0x38 as wide string (pszContent)
+                                    //   5. Also try every pointer as a direct wide string
+                                    if bp_name == "DialogBoxIndirectParamW" {
+                                        logs.push("  --- Deep TASKDIALOGCONFIG scan ---".into());
+
+                                        // Collect all unique heap pointers from stack
+                                        let mut heap_ptrs: Vec<(String, u64)> = Vec::new();
+                                        for i in 0..64 {
+                                            let candidate = u64::from_le_bytes(
+                                                stack_buf[i*8..(i+1)*8].try_into().unwrap()
+                                            );
+                                            if candidate < 0x10000 || candidate > 0x7FFF_FFFF_FFFF {
+                                                continue;
+                                            }
+                                            let m = find_module(candidate as usize, &modules);
+                                            if !m.contains("0x") {
+                                                continue; // skip code addresses
+                                            }
+                                            let label = format!("RSP+0x{:02x}", i * 8);
+                                            if !heap_ptrs.iter().any(|(_, p)| *p == candidate) {
+                                                heap_ptrs.push((label, candidate));
+                                            }
+                                        }
+
+                                        logs.push(format!("  Found {} unique heap pointers on stack", heap_ptrs.len()));
+
+                                        // Phase 1: Try each heap pointer as direct wide string AND as struct
+                                        for (label, candidate) in &heap_ptrs {
+                                            // First: try reading the pointer itself as a wide string
+                                            let direct_str = read_remote_wstr(h_process, *candidate as usize, 4096);
+                                            if !direct_str.starts_with("<read fail") && !direct_str.is_empty() {
+                                                // Check if it looks like printable text (not random bytes)
+                                                let printable_ratio = direct_str.chars()
+                                                    .take(50)
+                                                    .filter(|c| c.is_ascii_graphic() || c.is_ascii_whitespace() || *c == '\n' || *c == '\r')
+                                                    .count() as f64
+                                                    / direct_str.chars().take(50).count().max(1) as f64;
+                                                if printable_ratio > 0.6 && direct_str.len() > 3 {
+                                                    logs.push(format!(
+                                                        "  *** {} -> 0x{:x} DIRECT WSTR ({}ch, {:.0}% printable): \"{}\"",
+                                                        label, candidate, direct_str.len(), printable_ratio * 100.0,
+                                                        &direct_str[..direct_str.len().min(500)]
+                                                    ));
+                                                }
+                                            }
+
+                                            // Then: try reading as struct (log offset 0x38 etc.)
+                                            let mut config_buf = [0u8; 0x48];
+                                            if !read_remote(h_process, *candidate as usize, &mut config_buf) {
+                                                continue;
+                                            }
+                                            let cb_size = u32::from_le_bytes(
+                                                config_buf[0..4].try_into().unwrap()
+                                            );
+                                            let psz_content = u64::from_le_bytes(
+                                                config_buf[0x38..0x40].try_into().unwrap()
+                                            );
+                                            let psz_title = u64::from_le_bytes(
+                                                config_buf[0x20..0x28].try_into().unwrap()
+                                            );
+
+                                            // Only log struct details for non-code addresses with interesting cbSize
+                                            if cb_size >= 0x80 && cb_size <= 0x200 {
+                                                logs.push(format!(
+                                                    "  {} -> 0x{:x}: cbSize=0x{:x}({}) +0x20=0x{:x} +0x38=0x{:x}",
+                                                    label, candidate, cb_size, cb_size, psz_title, psz_content
+                                                ));
+                                                if psz_content > 0x10000 && psz_content < 0x7FFF_FFFF_FFFF {
+                                                    let content = read_remote_wstr(h_process, psz_content as usize, 2048);
+                                                    if !content.starts_with("<read fail") && !content.is_empty() {
+                                                        logs.push(format!("    +0x38 as wstr = \"{}\"", &content[..content.len().min(200)]));
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Phase 2: Read dwInitParam (5th arg) as a structure and scan its pointers
+                                        let dw_init_param = u64::from_le_bytes(
+                                            stack_buf[5*8..6*8].try_into().unwrap()  // [RSP+0x28]
+                                        );
+                                        if dw_init_param > 0x10000 && dw_init_param < 0x7FFF_FFFF_FFFF {
+                                            logs.push(format!("  --- dwInitParam scan (0x{:x}) ---", dw_init_param));
+                                            let mut init_buf = [0u8; 0x200];
+                                            if read_remote(h_process, dw_init_param as usize, &mut init_buf) {
+                                                // Dump first 32 pointers (256 bytes) of dwInitParam
+                                                for j in 0..32 {
+                                                    let ptr = u64::from_le_bytes(
+                                                        init_buf[j*8..(j+1)*8].try_into().unwrap()
+                                                    );
+                                                    if ptr < 0x10000 || ptr > 0x7FFF_FFFF_FFFF {
+                                                        continue;
+                                                    }
+                                                    let m = find_module(ptr as usize, &modules);
+                                                    // Try reading as wide string
+                                                    let s = read_remote_wstr(h_process, ptr as usize, 1024);
+                                                    let s_preview = if !s.starts_with("<read fail") && !s.is_empty() {
+                                                        format!(" wstr=\"{}\"", &s[..s.len().min(200)])
+                                                    } else {
+                                                        String::new()
+                                                    };
+                                                    logs.push(format!(
+                                                        "    +0x{:02x}: 0x{:x} [{}]{}",
+                                                        j * 8, ptr, m, s_preview
+                                                    ));
+
+                                                    // If this pointer is heap-like, also try reading IT
+                                                    // as a structure with pszContent at offset 0x38
+                                                    if m.contains("0x") {
+                                                        let mut inner_buf = [0u8; 0x48];
+                                                        if read_remote(h_process, ptr as usize, &mut inner_buf) {
+                                                            let inner_0x38 = u64::from_le_bytes(
+                                                                inner_buf[0x38..0x40].try_into().unwrap()
+                                                            );
+                                                            if inner_0x38 > 0x10000 && inner_0x38 < 0x7FFF_FFFF_FFFF {
+                                                                let cs = read_remote_wstr(h_process, inner_0x38 as usize, 2048);
+                                                                if !cs.starts_with("<read fail") && !cs.is_empty() {
+                                                                    logs.push(format!(
+                                                                        "      ->+0x38 wstr = \"{}\"",
+                                                                        &cs[..cs.len().min(200)]
+                                                                    ));
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Also: scan dwInitParam for pointers to TASKDIALOGCONFIG
+                                                // by checking each embedded pointer's cbSize
+                                                logs.push("  --- dwInitParam embedded struct scan ---".into());
+                                                for j in 0..64 {
+                                                    if j * 8 + 8 > init_buf.len() { break; }
+                                                    let ptr = u64::from_le_bytes(
+                                                        init_buf[j*8..(j+1)*8].try_into().unwrap()
+                                                    );
+                                                    if ptr < 0x10000 || ptr > 0x7FFF_FFFF_FFFF {
+                                                        continue;
+                                                    }
+                                                    let m = find_module(ptr as usize, &modules);
+                                                    if !m.contains("0x") { continue; }
+                                                    let mut cb_buf = [0u8; 0x48];
+                                                    if !read_remote(h_process, ptr as usize, &mut cb_buf) {
+                                                        continue;
+                                                    }
+                                                    let cb = u32::from_le_bytes(cb_buf[0..4].try_into().unwrap());
+                                                    if cb >= 0x80 && cb <= 0x200 {
+                                                        let p38 = u64::from_le_bytes(cb_buf[0x38..0x40].try_into().unwrap());
+                                                        logs.push(format!(
+                                                            "    dwInit+0x{:02x} -> 0x{:x}: cbSize=0x{:x}({}) +0x38=0x{:x}",
+                                                            j*8, ptr, cb, cb, p38
+                                                        ));
+                                                        if p38 > 0x10000 && p38 < 0x7FFF_FFFF_FFFF {
+                                                            let cs = read_remote_wstr(h_process, p38 as usize, 2048);
+                                                            if !cs.starts_with("<read fail") && !cs.is_empty() {
+                                                                logs.push(format!("      pszContent = \"{}\"", &cs[..cs.len().min(200)]));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                logs.push("  dwInitParam read failed".into());
+                                            }
                                         }
                                     }
                                 }
@@ -456,6 +714,35 @@ fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
     logs.push(format!("\nModules ({}):", modules.len()));
     for (base, name) in &modules {
         logs.push(format!("  0x{:016x} {}", base, name));
+    }
+
+    // Clean up debug session: terminate, drain events, close handles
+    unsafe {
+        use windows::Win32::System::Threading::*;
+        let _ = TerminateProcess(h_process, 1);
+        let drain_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if std::time::Instant::now() > drain_deadline { break; }
+            let mut ev: DEBUG_EVENT = std::mem::zeroed();
+            if WaitForDebugEvent(&mut ev, 500).is_err() { break; }
+            let is_exit = ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT;
+            match ev.dwDebugEventCode {
+                CREATE_PROCESS_DEBUG_EVENT => {
+                    let info = ev.u.CreateProcessInfo;
+                    if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                }
+                LOAD_DLL_DEBUG_EVENT => {
+                    let info = ev.u.LoadDll;
+                    if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                }
+                _ => {}
+            }
+            let _ = ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, DBG_CONTINUE);
+            if is_exit { break; }
+        }
+        let _ = WaitForSingleObject(h_process, 1000);
+        let _ = CloseHandle(h_process);
+        let _ = CloseHandle(h_thread);
     }
 
     Ok(CaptureResult {
@@ -551,11 +838,394 @@ fn find_module(addr: usize, modules: &[(usize, String)]) -> String {
     format!("0x{:x}", addr)
 }
 
-/// Non-diagnostic version for connect/preflight (discards logs).
+/// Non-diagnostic version for connect/preflight.
+/// Returns (raw_text, monitors, used_fallback).
 #[cfg(target_os = "windows")]
-fn capture_mstsc_silent() -> Result<(String, Vec<LiveMonitor>), String> {
-    let result = capture_debug_target("mstsc.exe /l")?;
-    Ok((result.raw_text, result.monitors))
+fn capture_mstsc_silent() -> Result<(String, Vec<LiveMonitor>, bool), String> {
+    // Primary: breakpoint-based capture (silent, no dialog/sound)
+    let mut _logs = Vec::new();
+    match capture_mstsc_bp(&mut _logs) {
+        Ok((text, monitors)) => Ok((text, monitors, false)),
+        Err(_bp_err) => {
+            // Fallback: old inline-hook approach (may show brief flash)
+            match capture_debug_target("mstsc.exe /l") {
+                Ok(result) if !result.monitors.is_empty() => {
+                    Ok((result.raw_text, result.monitors, true))
+                }
+                _ => Err("Both BP and hook capture failed".into()),
+            }
+        }
+    }
+}
+
+/// Check if text looks like mstsc /l monitor output.
+/// Expected format: "0: 1920 x 1200; (3840, 241, 5759, 1440)\n..."
+fn looks_like_monitor_text(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        line.len() > 5
+            && line.chars().next().map_or(false, |c| c.is_ascii_digit())
+            && (line.contains(':') || line.contains(';'))
+            && line.contains('(')
+            && line.contains(')')
+    })
+}
+
+/// Capture mstsc /l output via DialogBoxIndirectParamW breakpoint.
+/// Sets a single int3 BP, reads the monitor text from the stack, terminates mstsc.
+/// No dialog is shown, no sound is played.
+#[cfg(target_os = "windows")]
+fn capture_mstsc_bp(logs: &mut Vec<String>) -> Result<(String, Vec<LiveMonitor>), String> {
+    // Retry wrapper: if mstsc exits immediately (likely stale debug port), retry once
+    for attempt in 0..3 {
+        let result = capture_mstsc_bp_inner(logs);
+        match &result {
+            Err(e) if e.contains("process_exit") && attempt < 2 => {
+                logs.push(format!("--- Retry #{} (mstsc exited prematurely) ---", attempt + 1));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+            _ => return result,
+        }
+    }
+    unreachable!()
+}
+
+fn capture_mstsc_bp_inner(logs: &mut Vec<String>) -> Result<(String, Vec<LiveMonitor>), String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::*;
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::Win32::System::Memory::*;
+    use windows::Win32::System::Threading::*;
+    use windows::Win32::System::LibraryLoader::*;
+    use windows::core::*;
+
+    #[repr(C, align(16))]
+    struct Ctx([u8; 1232]);
+    extern "system" {
+        fn GetThreadContext(hThread: HANDLE, lpContext: *mut Ctx) -> BOOL;
+    }
+    const CTX_FLAGS: usize = 0x30;
+    const CTX_RSP: usize = 0x98;
+    const CTX_RIP: usize = 0xF8;
+    fn ctx_u64(ctx: &Ctx, off: usize) -> u64 {
+        u64::from_le_bytes(ctx.0[off..off + 8].try_into().unwrap())
+    }
+
+    // 1. Resolve DialogBoxIndirectParamW address (same base across processes)
+    let dbip_addr: usize = unsafe {
+        let user32 = LoadLibraryW(w!("user32.dll"))
+            .map_err(|e| format!("LoadLibrary user32: {e}"))?;
+        let proc = GetProcAddress(user32, s!("DialogBoxIndirectParamW"))
+            .ok_or("GetProcAddress(DialogBoxIndirectParamW) failed")?;
+        let addr = proc as usize;
+        let _ = FreeLibrary(user32);
+        addr
+    };
+    logs.push(format!("DialogBoxIndirectParamW @ 0x{:X}", dbip_addr));
+
+    // 2. Spawn mstsc /l as debuggee
+    let mut cmd_line: Vec<u16> = OsStr::new("mstsc.exe /l")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    unsafe {
+        CreateProcessW(
+            None,
+            PWSTR(cmd_line.as_mut_ptr()),
+            None,
+            None,
+            false,
+            DEBUG_PROCESS | CREATE_NEW_CONSOLE,
+            None,
+            None,
+            &si,
+            &mut pi,
+        )
+        .map_err(|e| format!("CreateProcess mstsc: {e}"))?;
+    }
+    let pid = pi.dwProcessId;
+    let h_process = pi.hProcess;
+    let h_thread = pi.hThread;
+    logs.push(format!("mstsc.exe PID={}", pid));
+
+    // 3. Debug loop — wait for DialogBoxIndirectParamW BP, read monitor text
+    let mut initial_bp = false;
+    let mut bp_set = false;
+    let mut orig_byte = 0u8;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut result_text: Option<String> = None;
+    let mut event_count = 0u32;
+    let mut dll_count = 0u32;
+    let mut bp_exception_count = 0u32;
+    let mut other_exception_count = 0u32;
+    let mut exit_reason = "timeout";
+
+    // Helper closure: try to set int3 BP at dbip_addr, verify it was written
+    let try_set_bp = |h_process: HANDLE, orig: &mut u8, already_set: &mut bool, logs: &mut Vec<String>, context: &str| {
+        if *already_set { return; }
+        unsafe {
+            let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+            if ReadProcessMemory(
+                h_process, dbip_addr as *const _,
+                orig as *mut u8 as *mut _, 1, None,
+            ).is_err() {
+                logs.push(format!("[{}] ReadProcessMemory failed at 0x{:X} — page not mapped", context, dbip_addr));
+                return;
+            }
+            logs.push(format!("[{}] orig byte at 0x{:X} = 0x{:02X}", context, dbip_addr, *orig));
+            let _ = VirtualProtectEx(
+                h_process, dbip_addr as *const _, 1,
+                PAGE_EXECUTE_READWRITE, &mut old_prot,
+            );
+            let bp = [0xCCu8];
+            let write_ok = WriteProcessMemory(
+                h_process, dbip_addr as *mut _,
+                bp.as_ptr() as *const _, 1, None,
+            ).is_ok();
+            let _ = VirtualProtectEx(
+                h_process, dbip_addr as *const _, 1,
+                old_prot, &mut old_prot,
+            );
+            // Verify the BP was actually written
+            let mut check = [0u8; 1];
+            if ReadProcessMemory(
+                h_process, dbip_addr as *const _,
+                check.as_mut_ptr() as *mut _, 1, None,
+            ).is_ok() && check[0] == 0xCC {
+                *already_set = true;
+                logs.push(format!("[{}] BP set OK (write={}, verify=0xCC)", context, write_ok));
+            } else {
+                logs.push(format!("[{}] BP FAILED (write={}, verify=0x{:02X})", context, write_ok, check[0]));
+            }
+        }
+    };
+
+    loop {
+        if std::time::Instant::now() > deadline {
+            exit_reason = "timeout";
+            break;
+        }
+
+        let mut event: DEBUG_EVENT = unsafe { std::mem::zeroed() };
+        if unsafe { WaitForDebugEvent(&mut event, 300).is_err() } {
+            continue;
+        }
+        event_count += 1;
+
+        let cont_status = match event.dwDebugEventCode {
+            CREATE_PROCESS_DEBUG_EVENT => {
+                let info = unsafe { event.u.CreateProcessInfo };
+                if !info.hFile.is_invalid() {
+                    unsafe { let _ = CloseHandle(info.hFile); }
+                }
+                DBG_CONTINUE
+            }
+            LOAD_DLL_DEBUG_EVENT => {
+                let info = unsafe { event.u.LoadDll };
+                if !info.hFile.is_invalid() {
+                    unsafe { let _ = CloseHandle(info.hFile); }
+                }
+                dll_count += 1;
+                // Try setting BP on each DLL load in case user32.dll just loaded
+                if initial_bp && !bp_set {
+                    try_set_bp(h_process, &mut orig_byte, &mut bp_set, logs, &format!("dll#{}", dll_count));
+                }
+                DBG_CONTINUE
+            }
+            EXCEPTION_DEBUG_EVENT => {
+                let info = unsafe { event.u.Exception };
+                let code = info.ExceptionRecord.ExceptionCode;
+
+                if code.0 == 0x80000003u32 as i32 {
+                    bp_exception_count += 1;
+                    // STATUS_BREAKPOINT
+                    if !initial_bp {
+                        // Initial breakpoint — try to set our BP
+                        initial_bp = true;
+                        logs.push(format!("Initial BP (event#{}, dll_count={})", event_count, dll_count));
+                        try_set_bp(h_process, &mut orig_byte, &mut bp_set, logs, "initial_bp");
+                        DBG_CONTINUE
+                    } else if bp_set {
+                        // Possible hit on our BP
+                        let h_thread = unsafe {
+                            OpenThread(THREAD_ALL_ACCESS, false, event.dwThreadId)
+                        };
+                        if let Ok(h_thread) = h_thread {
+                            let mut ctx = Ctx([0u8; 1232]);
+                            ctx.0[CTX_FLAGS..CTX_FLAGS + 4]
+                                .copy_from_slice(&0x0010001Fu32.to_le_bytes());
+                            let ok = unsafe { GetThreadContext(h_thread, &mut ctx).as_bool() };
+                            if ok {
+                                let rip = ctx_u64(&ctx, CTX_RIP);
+                                if rip.wrapping_sub(1) == dbip_addr as u64 {
+                                    // DialogBoxIndirectParamW BP hit!
+                                    logs.push(format!("BP HIT! RIP=0x{:X} (event#{})", rip, event_count));
+                                    let rsp = ctx_u64(&ctx, CTX_RSP);
+                                    logs.push(format!("RSP=0x{:X}", rsp));
+
+                                    // Try RSP+0x78 first (known good offset for current comctl32)
+                                    if let Some(t) = try_read_stack_wstr(h_process, rsp, 0x78) {
+                                        if looks_like_monitor_text(&t) {
+                                            logs.push(format!("RSP+0x78 -> monitor text ({} chars)", t.len()));
+                                            result_text = Some(t);
+                                        } else {
+                                            logs.push(format!("RSP+0x78 -> not monitor text: {:?}", &t[..t.len().min(80)]));
+                                        }
+                                    } else {
+                                        logs.push("RSP+0x78 -> null/unreadable".into());
+                                    }
+
+                                    // Fallback: scan all stack slots for monitor text
+                                    if result_text.is_none() {
+                                        logs.push("Scanning stack slots 0x00..0x1F8...".into());
+                                        for off in (0x00..=0x1F8).step_by(8) {
+                                            if off == 0x78 { continue; }
+                                            if let Some(t) = try_read_stack_wstr(h_process, rsp, off) {
+                                                if looks_like_monitor_text(&t) {
+                                                    logs.push(format!("RSP+0x{:X} -> monitor text ({} chars)", off, t.len()));
+                                                    result_text = Some(t);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if result_text.is_none() {
+                                            logs.push("No monitor text found in any stack slot".into());
+                                        }
+                                    }
+                                } else {
+                                    logs.push(format!("BP exception but RIP=0x{:X} != expected 0x{:X}+1, tid={}", rip, dbip_addr, event.dwThreadId));
+                                }
+                            } else {
+                                logs.push("GetThreadContext failed".into());
+                            }
+                            unsafe { let _ = CloseHandle(h_thread); }
+                        } else {
+                            logs.push(format!("OpenThread failed for tid={}", event.dwThreadId));
+                        }
+
+                        if result_text.is_some() {
+                            exit_reason = "success";
+                            unsafe {
+                                let _ = ContinueDebugEvent(
+                                    event.dwProcessId, event.dwThreadId, DBG_CONTINUE,
+                                );
+                            }
+                            break;
+                        }
+                        DBG_CONTINUE
+                    } else {
+                        logs.push(format!("BP exception but bp_set=false (event#{}, tid={})", event_count, event.dwThreadId));
+                        // BP not yet set — this might be a child thread initial breakpoint
+                        // Try to set BP again now
+                        try_set_bp(h_process, &mut orig_byte, &mut bp_set, logs, "extra_bp");
+                        DBG_CONTINUE
+                    }
+                } else {
+                    other_exception_count += 1;
+                    logs.push(format!("Exception 0x{:08X} (event#{}, first_chance={})",
+                        code.0 as u32, event_count, info.dwFirstChance));
+                    // Other exception — pass through
+                    DBG_EXCEPTION_NOT_HANDLED
+                }
+            }
+            EXIT_PROCESS_DEBUG_EVENT => {
+                exit_reason = "process_exit";
+                let exit_code = unsafe { event.u.ExitProcess.dwExitCode };
+                logs.push(format!("Process exited code={} (event#{})", exit_code, event_count));
+                unsafe {
+                    let _ = ContinueDebugEvent(
+                        event.dwProcessId, event.dwThreadId, DBG_CONTINUE,
+                    );
+                }
+                break;
+            }
+            _ => DBG_CONTINUE,
+        };
+
+        unsafe {
+            let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, cont_status);
+        }
+    }
+
+    logs.push(format!(
+        "Loop done: exit={}, events={}, dlls={}, bp_exceptions={}, other_exceptions={}, bp_set={}",
+        exit_reason, event_count, dll_count, bp_exception_count, other_exception_count, bp_set
+    ));
+
+    // Clean up debug session properly:
+    // 1. Terminate the process (if still alive)
+    // 2. Drain ALL remaining debug events until EXIT_PROCESS
+    //    (this is critical — undrained events poison the per-thread debug port)
+    // 3. Close handles
+    unsafe {
+        let _ = TerminateProcess(h_process, 1);
+        // Drain remaining events (EXIT_THREAD, EXIT_PROCESS from termination)
+        let drain_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut drained = 0u32;
+        loop {
+            if std::time::Instant::now() > drain_deadline { break; }
+            let mut ev: DEBUG_EVENT = std::mem::zeroed();
+            if WaitForDebugEvent(&mut ev, 500).is_err() { break; }
+            drained += 1;
+            let is_exit = ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT;
+            match ev.dwDebugEventCode {
+                CREATE_PROCESS_DEBUG_EVENT => {
+                    let info = ev.u.CreateProcessInfo;
+                    if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                }
+                LOAD_DLL_DEBUG_EVENT => {
+                    let info = ev.u.LoadDll;
+                    if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                }
+                _ => {}
+            }
+            let _ = ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, DBG_CONTINUE);
+            if is_exit { break; }
+        }
+        logs.push(format!("Drained {} cleanup events", drained));
+        // Wait for process to fully terminate
+        let _ = WaitForSingleObject(h_process, 1000);
+        let _ = CloseHandle(h_process);
+        let _ = CloseHandle(h_thread);
+    }
+    // Prevent ProcessGuard from double-closing (we already cleaned up)
+    std::mem::forget(ProcessGuard { h_process, h_thread });
+
+    match result_text {
+        Some(text) => {
+            let monitors = parse_mstsc_output(&text)?;
+            Ok((text, monitors))
+        }
+        None => Err(format!("BP capture: no monitor text found ({})", exit_reason)),
+    }
+}
+
+/// Try reading a stack slot as a pointer to a wide string.
+#[cfg(target_os = "windows")]
+fn try_read_stack_wstr(
+    h_process: windows::Win32::Foundation::HANDLE,
+    rsp: u64,
+    offset: u64,
+) -> Option<String> {
+    let mut ptr_buf = [0u8; 8];
+    if !read_remote(h_process, (rsp + offset) as usize, &mut ptr_buf) {
+        return None;
+    }
+    let ptr = u64::from_le_bytes(ptr_buf);
+    if ptr < 0x10000 || ptr > 0x7FFF_FFFF_FFFF {
+        return None;
+    }
+    let s = read_remote_wstr(h_process, ptr as usize, 4096);
+    if s.starts_with("<read fail") || s.starts_with("<null>") || s.is_empty() {
+        return None;
+    }
+    Some(s)
 }
 
 /// Spawn a target as a debuggee, hook dialog functions via inline patching, capture text.
@@ -599,12 +1269,9 @@ fn capture_debug_target(cmd: &str) -> Result<CaptureResult, String> {
 
     let h_process = pi.hProcess;
     let h_thread = pi.hThread;
-    let _guard = ProcessGuard {
-        h_process,
-        h_thread,
-    };
+    let cdt_pid = pi.dwProcessId;
 
-    logs.push(format!("Process created: PID={}", pi.dwProcessId));
+    logs.push(format!("Process created: PID={}", cdt_pid));
 
     // Allocate remote buffer for captured text
     let buf_size: usize = 8192;
@@ -903,6 +1570,34 @@ fn capture_debug_target(cmd: &str) -> Result<CaptureResult, String> {
             }
         }
     };
+
+    // Clean up debug session: terminate, drain events, close handles
+    unsafe {
+        let _ = TerminateProcess(h_process, 1);
+        let drain_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if std::time::Instant::now() > drain_deadline { break; }
+            let mut ev: DEBUG_EVENT = std::mem::zeroed();
+            if WaitForDebugEvent(&mut ev, 500).is_err() { break; }
+            let is_exit = ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT;
+            match ev.dwDebugEventCode {
+                CREATE_PROCESS_DEBUG_EVENT => {
+                    let info = ev.u.CreateProcessInfo;
+                    if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                }
+                LOAD_DLL_DEBUG_EVENT => {
+                    let info = ev.u.LoadDll;
+                    if !info.hFile.is_invalid() { let _ = CloseHandle(info.hFile); }
+                }
+                _ => {}
+            }
+            let _ = ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, DBG_CONTINUE);
+            if is_exit { break; }
+        }
+        let _ = WaitForSingleObject(h_process, 1000);
+        let _ = CloseHandle(h_process);
+        let _ = CloseHandle(h_thread);
+    }
 
     Ok(CaptureResult {
         raw_text: text,
@@ -1563,39 +2258,47 @@ fn enumerate_display_monitors() -> Result<Vec<LiveMonitor>, String> {
     }
 }
 
-#[allow(dead_code)]
 fn parse_mstsc_output(text: &str) -> Result<Vec<LiveMonitor>, String> {
-    let re_line = regex_lite_parse(text);
-    if re_line.is_empty() {
+    let monitors = parse_mstsc_lines(text);
+    if monitors.is_empty() {
         return Err("No monitor lines found in mstsc output".into());
     }
-    Ok(re_line)
+    Ok(monitors)
 }
 
-#[allow(dead_code)]
-fn regex_lite_parse(text: &str) -> Vec<LiveMonitor> {
+/// Parse mstsc /l output. Handles real format:
+///   "0: 1920 x 1200; (3840, 241, 5759, 1440)"
+/// Coordinates are inclusive bounds → width = right - left + 1.
+fn parse_mstsc_lines(text: &str) -> Vec<LiveMonitor> {
     let mut monitors = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.split(';').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let id_str = parts[0].trim();
-        let id: u32 = match id_str.parse() {
+
+        // Split "ID: rest" by first ':'
+        let (id_str, rest) = match line.split_once(':') {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let id: u32 = match id_str.trim().parse() {
             Ok(v) => v,
             Err(_) => continue,
         };
 
-        let coords = extract_numbers(parts[1]);
+        // Find coordinates in parentheses: (left, top, right, bottom)
+        let coords_start = match rest.rfind('(') {
+            Some(i) => i,
+            None => continue,
+        };
+        let coords = extract_numbers(&rest[coords_start..]);
         if coords.len() < 4 {
             continue;
         }
-        let width = (coords[2] - coords[0]) as u32;
-        let height = (coords[3] - coords[1]) as u32;
+        // Inclusive bounds → +1 for width/height
+        let width = (coords[2] - coords[0] + 1) as u32;
+        let height = (coords[3] - coords[1] + 1) as u32;
 
         let is_primary = line.to_uppercase().contains("PRIMARY");
 
@@ -1744,16 +2447,21 @@ mod tests {
 
     #[test]
     fn test_parse_mstsc_output() {
-        let text = "0; (-1920, 0, 0, 1080); (1920 x 1080)\n\
-                     1; (0, 0, 2560, 1440); (2560 x 1440)  [PRIMARY]\n\
-                     2; (2560, 0, 4480, 1080); (1920 x 1080)";
+        // Real mstsc /l format: "ID: WxH; (left, top, right, bottom)"
+        // Coordinates are inclusive bounds → width = right - left + 1
+        let text = "0: 1920 x 1080; (-1921, 0, -2, 1079)\n\
+                     1: 2560 x 1440; (0, 0, 2559, 1439)  [PRIMARY]\n\
+                     2: 1920 x 1080; (2560, 0, 4479, 1079)";
         let monitors = parse_mstsc_output(text).unwrap();
         assert_eq!(monitors.len(), 3);
         assert_eq!(monitors[0].mstsc_id, 0);
-        assert_eq!(monitors[0].left, -1920);
+        assert_eq!(monitors[0].left, -1921);
         assert_eq!(monitors[0].width, 1920);
+        assert_eq!(monitors[0].height, 1080);
         assert!(monitors[1].is_primary);
+        assert_eq!(monitors[1].width, 2560);
         assert_eq!(monitors[2].left, 2560);
+        assert_eq!(monitors[2].width, 1920);
     }
 
     #[test]

@@ -19,6 +19,7 @@ struct FullState {
     config: AppConfig,
     monitors: Vec<LiveMonitor>,
     active_sessions: Vec<session::ActiveSession>,
+    mstsc_id_fallback: bool,
 }
 
 #[derive(Serialize)]
@@ -32,13 +33,15 @@ struct ConnectResult {
 #[tauri::command]
 fn get_state(state: State<AppState>) -> Result<FullState, String> {
     let config = state.config.lock().map_err(|e| e.to_string())?;
-    let monitors = monitor::get_current_monitors().unwrap_or_default();
+    let (monitors, mstsc_id_fallback) = monitor::get_monitors_for_connect()
+        .unwrap_or_else(|_| (monitor::get_current_monitors().unwrap_or_default(), true));
     let active_sessions = session::get_active_sessions();
 
     Ok(FullState {
         config: config.clone(),
         monitors,
         active_sessions,
+        mstsc_id_fallback,
     })
 }
 
@@ -133,7 +136,7 @@ fn preflight_connect(
         .get(profile_key)
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
-    let live = monitor::get_monitors_for_connect()?;
+    let (live, _fallback) = monitor::get_monitors_for_connect()?;
     let _selected = monitor::resolve_profile(&config, profile, &live)?;
 
     let rdp_host = rdp::read_rdp_host(&host.rdp_file).unwrap_or_default();
@@ -174,7 +177,7 @@ fn connect(
         .get(profile_key)
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
-    let live = monitor::get_monitors_for_connect()?;
+    let (live, _fallback) = monitor::get_monitors_for_connect()?;
     let selected = monitor::resolve_profile(&config, profile, &live)?;
 
     let launch_rdp = rdp::prepare_rdp_for_launch(&host.rdp_file, &selected)?;
