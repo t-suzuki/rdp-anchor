@@ -111,6 +111,7 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .monitor-box:hover{border-color:var(--text2)}
 .monitor-box.selected{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
 .monitor-box .mon-label{font-weight:500;font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90%;line-height:1.2}
+.monitor-box .mon-sublabel{font-size:9px;color:var(--text3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90%;line-height:1.1}
 .monitor-box .mon-res{font-size:10px;color:var(--text3)}
 .monitor-box .mon-primary{position:absolute;top:2px;right:4px;font-size:9px;color:var(--accent);font-weight:600}
 
@@ -139,6 +140,13 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .host-card.drag-over{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .card-grip{color:var(--text3);cursor:grab;font-size:16px;padding:0 2px;user-select:none;line-height:1;touch-action:none}
 .card-grip:hover{color:var(--text2)}
+
+/* ─ Language picker ─ */
+.lang-picker{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:60px 20px}
+.lang-picker h2{font-size:20px;font-weight:600}
+.lang-picker .lang-options{display:flex;gap:16px}
+.lang-picker .lang-btn{background:var(--card);border:2px solid var(--border);border-radius:var(--radius);padding:20px 40px;font-size:16px;font-weight:500;color:var(--text);cursor:pointer;transition:all .15s}
+.lang-picker .lang-btn:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -147,7 +155,7 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
   <h1>RDP Launcher <span style="font-size:11px;font-weight:400;color:var(--text3)">v0.0.1</span></h1>
   <span id="fallbackBadge" style="display:none;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--amber);color:#000;font-weight:600;white-space:nowrap" title="mstsc BP capture failed. Monitor IDs may be incorrect after reboot.">ID fallback</span>
   <a href="#" onclick="event.preventDefault();openGitHub()" style="-webkit-app-region:no-drag;color:var(--text2);font-size:18px;line-height:1;text-decoration:none;padding:4px" title="GitHub: t-suzuki/rdp-launcher"><svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-  <button class="btn-ghost" onclick="openSettings()" style="font-size:15px">&#x2699; 設定</button>
+  <button class="btn-ghost" id="settingsBtn" onclick="openSettings()" style="font-size:15px">&#x2699; 設定</button>
 </header>
 
 <main id="main"></main>
@@ -177,14 +185,150 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 <div class="toast" id="toast"></div>
 
 <!-- Drop overlay -->
-<div class="drop-overlay" id="dropOverlay"><span>.rdp ファイルをドロップしてホストを追加</span></div>
+<div class="drop-overlay" id="dropOverlay"><span id="dropMessage">.rdp ファイルをドロップしてホストを追加</span></div>
 
 <script>
+// ─── i18n ────────────────────────────────────────────────────────────
+const I18N = {
+  // Header
+  'header.settings': { ja: '\u2699 設定', en: '\u2699 Settings' },
+  // Drop overlay
+  'drop.message': { ja: '.rdp ファイルをドロップしてホストを追加', en: 'Drop .rdp files here to add hosts' },
+  // Main view
+  'main.noHosts': { ja: '接続先が未登録です', en: 'No hosts registered' },
+  'main.noHostsDesc': { ja: 'RDPファイルを指定してホストを追加してください。<br>.rdp ファイルをウィンドウにドロップしても追加できます。', en: 'Add hosts by specifying RDP files.<br>You can also drop .rdp files onto this window.' },
+  'main.addHost': { ja: '+ ホストを追加', en: '+ Add Host' },
+  'main.defaultSuffix': { ja: '\uff08\u30c7\u30d5\u30a9\u30eb\u30c8\uff09', en: ' (default)' },
+  'main.connected': { ja: '\u25cf 接続中 \u2014 再接続', en: '\u25cf Connected \u2014 Reconnect' },
+  'main.connect': { ja: '接続', en: 'Connect' },
+  // Toast
+  'toast.autoDetected': { ja: 'モニターを自動検出しました', en: 'Monitors auto-detected' },
+  'toast.detected': { ja: 'モニターを検出しました', en: 'Monitors detected' },
+  'toast.saved': { ja: '保存しました', en: 'Saved' },
+  // Settings
+  'settings.title': { ja: '設定', en: 'Settings' },
+  'settings.tab.general': { ja: '一般', en: 'General' },
+  'settings.tab.profiles': { ja: 'プロファイル', en: 'Profiles' },
+  'settings.tab.monitors': { ja: 'モニター', en: 'Monitors' },
+  'settings.tab.advanced': { ja: '高度なオプション', en: 'Advanced' },
+  // General tab
+  'general.language': { ja: '言語 / Language', en: 'Language / 言語' },
+  'general.langJa': { ja: '日本語', en: '日本語 (Japanese)' },
+  'general.langEn': { ja: 'English', en: 'English' },
+  // Monitors tab
+  'monitors.currentDetected': { ja: '現在検出中のモニター:', en: 'Currently detected monitors:' },
+  'monitors.noDefs': { ja: 'モニター定義がありません。「自動検出」で作成してください。', en: 'No monitor definitions. Use "Auto Detect" to create them.' },
+  'monitors.registered': { ja: '登録済みモニター定義', en: 'Registered monitor definitions' },
+  'monitors.autoDetect': { ja: '\ud83d\udd0d 自動検出', en: '\ud83d\udd0d Auto Detect' },
+  'monitors.editTitle': { ja: 'モニター定義の編集', en: 'Edit monitor definition' },
+  'monitors.key': { ja: 'キー (ID)', en: 'Key (ID)' },
+  'monitors.displayName': { ja: '表示名', en: 'Display name' },
+  'monitors.width': { ja: '幅', en: 'Width' },
+  'monitors.height': { ja: '高さ', en: 'Height' },
+  // Advanced tab
+  'adv.captureTest': { ja: 'mstsc /l サイレントキャプチャテスト', en: 'mstsc /l Silent Capture Test' },
+  'adv.captureDesc': { ja: 'DialogBoxIndirectParamW BPを使って mstsc /l の出力をサイレントキャプチャします。<br>ダイアログ・音なしでモニターIDを取得し、正確性を確認できます。', en: 'Silently captures mstsc /l output using DialogBoxIndirectParamW breakpoint.<br>Gets monitor IDs without dialog or sound to verify accuracy.' },
+  'adv.runTest': { ja: 'テスト実行', en: 'Run Test' },
+  'adv.hookTest': { ja: 'フック機構テスト', en: 'Hook Mechanism Test' },
+  'adv.hookDesc': { ja: 'Python で MessageBoxW を呼ぶプロセスを起動し、インラインフックが機能するか検証します。<br>ダイアログが出なければフック成功、出ればフック機構自体に問題あり。', en: 'Launches a Python process calling MessageBoxW to verify inline hook functionality.<br>No dialog = hook works, dialog appears = hook mechanism issue.' },
+  'adv.runHookTest': { ja: 'フック機構テスト実行', en: 'Run Hook Test' },
+  'adv.diagnose': { ja: 'mstsc診断 (CreateWindowExW)', en: 'mstsc Diagnosis (CreateWindowExW)' },
+  'adv.diagnoseDesc': { ja: 'mstsc /l にブレークポイントを設定し、CreateWindowExW の全呼び出しをパラメータ付きで記録します。', en: 'Sets breakpoints on mstsc /l and logs all CreateWindowExW calls with parameters.' },
+  'adv.runDiagnose': { ja: '診断実行', en: 'Run Diagnosis' },
+  'adv.enumCompare': { ja: 'EnumDisplayMonitors 比較', en: 'EnumDisplayMonitors Comparison' },
+  'adv.enumDesc': { ja: '現在の EnumDisplayMonitors の結果と比較します。', en: 'Compare with current EnumDisplayMonitors results.' },
+  'adv.deviceName': { ja: 'デバイス名', en: 'Device' },
+  'adv.position': { ja: '位置', en: 'Position' },
+  'adv.resolution': { ja: '解像度', en: 'Resolution' },
+  'adv.noMonitors': { ja: 'モニターが検出されていません', en: 'No monitors detected' },
+  'adv.capturing': { ja: 'mstsc /l をキャプチャ中... (最大5秒)', en: 'Capturing mstsc /l... (max 5s)' },
+  'adv.parseResult': { ja: 'パース結果', en: 'Parse result' },
+  'adv.debugLog': { ja: 'デバッグログ:', en: 'Debug logs:' },
+  'adv.rawText': { ja: 'キャプチャした生テキスト:', en: 'Captured raw text:' },
+  'adv.noText': { ja: 'テキストがキャプチャされませんでした', en: 'No text was captured' },
+  'adv.error': { ja: 'エラー: ', en: 'Error: ' },
+  'adv.hookSuccess': { ja: 'フック成功: プローブが呼ばれました', en: 'Hook success: probe was called' },
+  'adv.hookFail': { ja: 'フック失敗: センチネル未変更（フック機構自体に問題あり）', en: 'Hook failed: sentinel unchanged (hook mechanism issue)' },
+  'adv.testing': { ja: 'Python MessageBoxW テスト中...', en: 'Testing Python MessageBoxW...' },
+  'adv.match': { ja: '一致', en: 'Match' },
+  'adv.idsMatch': { ja: '\u2713 EnumDisplayMonitors と mstsc のIDは一致しています', en: '\u2713 EnumDisplayMonitors and mstsc IDs match' },
+  'adv.idsMismatch': { ja: '\u2717 IDが一致しません \u2014 フックによるID補正が必要です', en: '\u2717 IDs do not match \u2014 hook-based ID correction needed' },
+  'adv.running': { ja: '実行中...', en: 'Running...' },
+  'adv.diagnosing': { ja: '診断中...', en: 'Diagnosing...' },
+  // Profiles tab
+  'profiles.noProfiles': { ja: 'プロファイルがありません。モニターを検出してからプロファイルを作成してください。', en: 'No profiles. Detect monitors first, then create profiles.' },
+  'profiles.add': { ja: '+ 新しいプロファイル', en: '+ New Profile' },
+  'profiles.detectFirst': { ja: '先にモニターを検出してください', en: 'Detect monitors first' },
+  'profiles.new': { ja: '新しいプロファイル', en: 'New Profile' },
+  'profiles.edit': { ja: 'プロファイルの編集', en: 'Edit Profile' },
+  'profiles.name': { ja: 'プロファイル名', en: 'Profile name' },
+  'profiles.namePlaceholder': { ja: '例: 左2画面', en: 'e.g. Left 2 screens' },
+  'profiles.key': { ja: 'キー (ID)', en: 'Key (ID)' },
+  'profiles.keyPlaceholder': { ja: '英数字のID', en: 'Alphanumeric ID' },
+  'profiles.selectMonitors': { ja: '使用するモニターを選択 (クリックで選択/解除、ダブルクリックでPrimary):', en: 'Select monitors (click to toggle, double-click for Primary):' },
+  'profiles.selected': { ja: '選択中: ', en: 'Selected: ' },
+  'profiles.none': { ja: 'なし', en: 'None' },
+  'profiles.nameRequired': { ja: '名前を入力してください', en: 'Please enter a name' },
+  'profiles.selectRequired': { ja: 'モニターを1つ以上選択してください', en: 'Select at least one monitor' },
+  'profiles.notContiguous': { ja: '飛び地のモニター配置は選択できません。隣接するモニターを選択してください。', en: 'Cannot select non-contiguous monitors. Select adjacent monitors.' },
+  'profiles.deleteConfirm': { ja: 'プロファイル "{name}" を削除しますか？', en: 'Delete profile "{name}"?' },
+  // Host editor
+  'host.add': { ja: 'ホストを追加', en: 'Add Host' },
+  'host.edit': { ja: 'ホストを編集', en: 'Edit Host' },
+  'host.displayName': { ja: '表示名', en: 'Display name' },
+  'host.namePlaceholder': { ja: '例: 開発サーバー', en: 'e.g. Dev Server' },
+  'host.rdpFile': { ja: 'RDPファイル', en: 'RDP File' },
+  'host.browse': { ja: '参照...', en: 'Browse...' },
+  'host.defaultProfile': { ja: 'デフォルトプロファイル', en: 'Default Profile' },
+  'host.noProfiles': { ja: 'プロファイルがありません', en: 'No profiles available' },
+  'host.colorTag': { ja: 'カラータグ', en: 'Color tag' },
+  'host.nameRequired': { ja: '表示名を入力してください', en: 'Please enter a display name' },
+  'host.rdpRequired': { ja: 'RDPファイルを指定してください', en: 'Please specify an RDP file' },
+  'host.deleteConfirm': { ja: '"{name}" を削除しますか？', en: 'Delete "{name}"?' },
+  // Common
+  'common.back': { ja: '戻る', en: 'Back' },
+  'common.save': { ja: '保存', en: 'Save' },
+  'common.cancel': { ja: 'キャンセル', en: 'Cancel' },
+  'common.delete': { ja: '削除', en: 'Delete' },
+  'common.reconnect': { ja: '再接続する', en: 'Reconnect' },
+  'common.edit': { ja: '編集', en: 'Edit' },
+  // Connect
+  'connect.alreadyConnected': { ja: '{name}({host})に既に接続中です。再接続すると既存のセッションが切断されます。', en: 'Already connected to {name} ({host}). Reconnecting will disconnect the existing session.' },
+  'connect.started': { ja: '接続開始: {name} (monitors: {monitors})', en: 'Connecting: {name} (monitors: {monitors})' },
+  // Import
+  'import.error': { ja: 'RDP読み込みエラー: ', en: 'RDP import error: ' },
+  // Language picker
+  'langpick.title': { ja: '言語を選択 / Select Language', en: 'Select Language / 言語を選択' },
+};
+
+let currentLang = 'ja';
+
+function t(key, params) {
+  let s = I18N[key]?.[currentLang] || I18N[key]?.en || key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      s = s.replaceAll(`{${k}}`, v);
+    }
+  }
+  return s;
+}
+
+function applyLanguage() {
+  document.documentElement.lang = currentLang === 'ja' ? 'ja' : 'en';
+  document.getElementById('settingsBtn').innerHTML = t('header.settings');
+  document.getElementById('dropMessage').textContent = t('drop.message');
+  renderMain();
+  if (document.getElementById('settingsOverlay').classList.contains('open')) {
+    document.getElementById('settingsTitle').textContent = t('settings.title');
+    renderSettings();
+  }
+}
+
 // ─── Tauri API ──────────────────────────────────────────────────────
 const invoke = window.__TAURI__?.core?.invoke ?? (async (cmd, args) => {
   console.warn(`[mock] invoke(${cmd})`, args);
   if (cmd === 'get_state') return {
-    config: { monitors: {}, profiles: {}, hosts: [] },
+    config: { monitors: {}, profiles: {}, hosts: [], language: '' },
     monitors: [
       { mstsc_id: 0, left: -1920, top: 0, width: 1920, height: 1080, is_primary: false, device_name: 'HP VH240a' },
       { mstsc_id: 1, left: 0, top: -360, width: 2560, height: 1440, is_primary: true, device_name: 'Dell U2723QE' },
@@ -202,7 +346,7 @@ const invoke = window.__TAURI__?.core?.invoke ?? (async (cmd, args) => {
 
 // ─── State ──────────────────────────────────────────────────────────
 let S = {
-  config: { monitors: {}, profiles: {}, hosts: [] },
+  config: { monitors: {}, profiles: {}, hosts: [], language: '' },
   liveMonitors: [],
   activeSessions: [],
   settingsTab: 'profiles',
@@ -222,17 +366,51 @@ async function refreshAll() {
     S.activeSessions = state.active_sessions;
     document.getElementById('fallbackBadge').style.display = state.mstsc_id_fallback ? '' : 'none';
 
+    // Set language from config
+    if (S.config.language) {
+      currentLang = S.config.language;
+      applyLanguage();
+    }
+
     // Auto-detect monitors on first run
     if (Object.keys(S.config.monitors).length === 0 && S.liveMonitors.length > 0) {
       try {
         const defs = await invoke('auto_detect_monitors');
         S.config.monitors = defs;
-        toast('モニターを自動検出しました');
+        toast(t('toast.autoDetected'));
       } catch (e) { console.warn('Auto-detect failed:', e); }
+    }
+
+    // First launch: no language set → show language picker
+    if (!S.config.language) {
+      showLanguagePicker();
+      return;
     }
   } catch (e) {
     console.error(e);
   }
+  renderMain();
+}
+
+function showLanguagePicker() {
+  const el = document.getElementById('main');
+  el.innerHTML = `
+    <div class="lang-picker">
+      <h2>${t('langpick.title')}</h2>
+      <div class="lang-options">
+        <button class="lang-btn" onclick="pickLanguage('ja')">日本語</button>
+        <button class="lang-btn" onclick="pickLanguage('en')">English</button>
+      </div>
+    </div>`;
+}
+
+async function pickLanguage(lang) {
+  currentLang = lang;
+  S.config.language = lang;
+  applyLanguage();
+  try {
+    await invoke('save_config', { newConfig: S.config });
+  } catch (e) { console.error(e); }
   renderMain();
 }
 
@@ -247,8 +425,6 @@ function toast(msg, type = 'success') {
 
 // ─── 2D Monitor Layout ──────────────────────────────────────────────
 function renderLayout2D(monitors, opts = {}) {
-  // monitors: array of { left, top, width, height, ... }
-  // opts: { maxW, maxH, labelFn, classFn }
   if (!monitors || monitors.length === 0) return '';
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -273,11 +449,13 @@ function renderLayout2D(monitors, opts = {}) {
     const w = m.width * scale;
     const h = m.height * scale;
     const label = opts.labelFn ? opts.labelFn(m, i) : (m.device_name || m.name || `ID ${m.mstsc_id ?? i}`);
+    const sublabel = opts.sublabelFn ? opts.sublabelFn(m, i) : '';
     const res = `${m.width}\u00d7${m.height}`;
     const cls = opts.classFn ? opts.classFn(m, i) : 'monitor-box';
     const primary = m._isPrimary || m.is_primary;
     return `<div class="${cls}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px" data-idx="${i}">
       <div class="mon-label">${esc(label)}</div>
+      ${sublabel ? `<div class="mon-sublabel">${esc(sublabel)}</div>` : ''}
       <div class="mon-res">${res}</div>
       ${primary ? '<div class="mon-primary">\u2605</div>' : ''}
     </div>`;
@@ -309,7 +487,6 @@ function onSortMove(e) {
   for (let i = 0; i < cards.length; i++) {
     if (i === idx) continue;
     const r = rects[i];
-    const midY = r.top + r.height / 2;
     if (y > r.top && y < r.bottom) {
       cards[i].classList.add('drag-over');
       sortState.targetIdx = i;
@@ -350,6 +527,14 @@ function openGitHub() {
   window.open(url, '_blank');
 }
 
+// ─── Monitor name helpers ───────────────────────────────────────────
+function findMonitorDef(liveMonitor) {
+  return Object.entries(S.config.monitors || {}).find(([, d]) =>
+    d.left === liveMonitor.left && d.top === liveMonitor.top &&
+    d.width === liveMonitor.width && d.height === liveMonitor.height
+  );
+}
+
 // ─── Main view ──────────────────────────────────────────────────────
 function renderMain() {
   const el = document.getElementById('main');
@@ -358,10 +543,10 @@ function renderMain() {
   if (hosts.length === 0) {
     el.innerHTML = `
       <div class="empty">
-        <h2>接続先が未登録です</h2>
-        <p>RDPファイルを指定してホストを追加してください。<br>.rdp ファイルをウィンドウにドロップしても追加できます。</p>
+        <h2>${t('main.noHosts')}</h2>
+        <p>${t('main.noHostsDesc')}</p>
         <button class="btn-primary" onclick="addHostDialog()" style="padding:10px 28px;font-size:14px">
-          + ホストを追加
+          ${t('main.addHost')}
         </button>
       </div>`;
     return;
@@ -379,7 +564,7 @@ function renderMain() {
     const profileOptions = Object.entries(S.config.profiles || {})
       .map(([k, v]) => {
         const isDefault = k === h.default_profile;
-        const label = isDefault ? `${v.name}\uff08\u30c7\u30d5\u30a9\u30eb\u30c8\uff09` : v.name;
+        const label = isDefault ? `${v.name}${t('main.defaultSuffix')}` : v.name;
         return `<option value="${esc(k)}">${esc(label)}</option>`;
       }).join('');
 
@@ -394,14 +579,14 @@ function renderMain() {
           <div class="card-host">${esc(rdpHost)}</div>
         </div>
         <div class="card-actions">
-          <button class="btn-icon" onclick="event.stopPropagation();editHostDialog('${esc(h.id)}')" title="編集">&#x270e;</button>
-          <button class="btn-icon" onclick="event.stopPropagation();deleteHost('${esc(h.id)}','${esc(h.name)}')" title="削除">&#x1f5d1;</button>
+          <button class="btn-icon" onclick="event.stopPropagation();editHostDialog('${esc(h.id)}')" title="${t('common.edit')}">&#x270e;</button>
+          <button class="btn-icon" onclick="event.stopPropagation();deleteHost('${esc(h.id)}','${esc(h.name)}')" title="${t('common.delete')}">&#x1f5d1;</button>
         </div>
       </div>
       <div class="monitor-preview" id="card-preview-${esc(h.id)}">${renderMonitorPreviewInner(h.default_profile)}</div>
       <button class="btn-connect ${isActive ? 'connected' : ''}"
               onclick="event.stopPropagation();doConnect('${esc(h.id)}')">
-        ${isActive ? '\u25cf 接続中 \u2014 再接続' : '接続'}
+        ${isActive ? t('main.connected') : t('main.connect')}
       </button>
       <div class="profile-row">
         <label>Profile:</label>
@@ -415,7 +600,7 @@ function renderMain() {
   el.innerHTML = `
     <div class="host-grid">
       ${cards}
-      <div class="add-card" onclick="addHostDialog()">+ ホストを追加</div>
+      <div class="add-card" onclick="addHostDialog()">${t('main.addHost')}</div>
     </div>`;
 
   hosts.forEach(h => {
@@ -471,21 +656,24 @@ async function doConnect(hostId) {
     });
 
     if (result.needs_confirm) {
+      const msg = t('connect.alreadyConnected', { name: result.host_name, host: result.host });
       showConfirm(
         '\u26a0',
-        result.message,
-        '再接続する',
+        msg,
+        t('common.reconnect'),
         async () => {
           try {
-            const msg = await invoke('connect', { hostId, profileId: profileId || null });
-            toast(msg);
+            const resp = await invoke('connect', { hostId, profileId: profileId || null });
+            const parts = resp.split('|');
+            toast(t('connect.started', { name: parts[0] || host.name, monitors: parts[1] || '' }));
             setTimeout(refreshAll, 2000);
           } catch (e) { toast(String(e), 'error'); }
         }
       );
     } else {
-      const msg = await invoke('connect', { hostId, profileId: profileId || null });
-      toast(msg);
+      const resp = await invoke('connect', { hostId, profileId: profileId || null });
+      const parts = resp.split('|');
+      toast(t('connect.started', { name: parts[0] || host.name, monitors: parts[1] || '' }));
       setTimeout(refreshAll, 2000);
     }
   } catch (e) {
@@ -499,7 +687,7 @@ function showConfirm(icon, message, actionLabel, onConfirm) {
     <div class="icon">${icon}</div>
     <p class="warn">${esc(message)}</p>`;
   document.getElementById('confirmFooter').innerHTML = `
-    <button class="btn-ghost" onclick="closeConfirm()">キャンセル</button>
+    <button class="btn-ghost" onclick="closeConfirm()">${t('common.cancel')}</button>
     <button class="btn-danger" id="confirmAction">${esc(actionLabel)}</button>`;
   document.getElementById('confirmAction').onclick = () => { closeConfirm(); onConfirm(); };
   document.getElementById('confirmOverlay').classList.add('open');
@@ -509,7 +697,7 @@ function closeConfirm() { document.getElementById('confirmOverlay').classList.re
 // ─── Settings ───────────────────────────────────────────────────────
 function openSettings(tab) {
   S.settingsTab = tab || 'profiles';
-  document.getElementById('settingsTitle').textContent = '設定';
+  document.getElementById('settingsTitle').textContent = t('settings.title');
   renderSettings();
   document.getElementById('settingsOverlay').classList.add('open');
 }
@@ -519,15 +707,44 @@ function closeSettings() {
 }
 
 function renderSettings() {
-  const tabs = ['profiles', 'monitors', 'advanced'];
-  const labels = { monitors: 'モニター', profiles: 'プロファイル', advanced: '高度なオプション' };
-  document.getElementById('settingsTabs').innerHTML = tabs.map(t =>
-    `<div class="tab ${S.settingsTab === t ? 'active' : ''}" onclick="S.settingsTab='${t}';renderSettings()">${labels[t]}</div>`
+  const tabs = ['general', 'profiles', 'monitors', 'advanced'];
+  const labels = {
+    general: t('settings.tab.general'),
+    monitors: t('settings.tab.monitors'),
+    profiles: t('settings.tab.profiles'),
+    advanced: t('settings.tab.advanced'),
+  };
+  document.getElementById('settingsTabs').innerHTML = tabs.map(tb =>
+    `<div class="tab ${S.settingsTab === tb ? 'active' : ''}" onclick="S.settingsTab='${tb}';renderSettings()">${labels[tb]}</div>`
   ).join('');
 
-  if (S.settingsTab === 'monitors') renderMonitorsTab();
+  if (S.settingsTab === 'general') renderGeneralTab();
+  else if (S.settingsTab === 'monitors') renderMonitorsTab();
   else if (S.settingsTab === 'advanced') renderAdvancedTab();
   else renderProfilesTab();
+}
+
+// ── General tab ──
+function renderGeneralTab() {
+  const body = document.getElementById('settingsBody');
+  body.innerHTML = `
+    <div class="field">
+      <label>${t('general.language')}</label>
+      <select id="langSelect" onchange="changeLanguage(this.value)" style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font)">
+        <option value="ja" ${currentLang === 'ja' ? 'selected' : ''}>${t('general.langJa')}</option>
+        <option value="en" ${currentLang === 'en' ? 'selected' : ''}>${t('general.langEn')}</option>
+      </select>
+    </div>`;
+  document.getElementById('settingsFooter').innerHTML = '';
+}
+
+async function changeLanguage(lang) {
+  currentLang = lang;
+  S.config.language = lang;
+  applyLanguage();
+  try {
+    await invoke('save_config', { newConfig: S.config });
+  } catch (e) { console.error(e); }
 }
 
 // ── Monitors tab ──
@@ -541,10 +758,17 @@ async function renderMonitorsTab() {
     const liveLayout = renderLayout2D(S.liveMonitors, {
       maxW: 500,
       maxH: 160,
-      labelFn: (m) => m.device_name || `ID ${m.mstsc_id}`,
+      labelFn: (m) => {
+        const defEntry = findMonitorDef(m);
+        return defEntry ? defEntry[1].name : (m.device_name || `ID ${m.mstsc_id}`);
+      },
+      sublabelFn: (m) => {
+        const defEntry = findMonitorDef(m);
+        return defEntry ? (m.device_name || '') : '';
+      },
     });
     liveHTML = `<div style="margin-bottom:16px">
-      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">現在検出中のモニター:</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">${t('monitors.currentDetected')}</div>
       <div class="monitor-layout">${liveLayout}</div>
     </div>`;
   }
@@ -559,28 +783,28 @@ async function renderMonitorsTab() {
             ${esc(key)} \u00b7 (${m.left}, ${m.top}) ${m.width}\u00d7${m.height}
           </div>
         </div>
-        <button class="btn-icon" onclick="editMonitorDef('${esc(key)}')" title="編集">&#x270e;</button>
+        <button class="btn-icon" onclick="editMonitorDef('${esc(key)}')" title="${t('common.edit')}">&#x270e;</button>
       </div>
     `).join('');
   } else {
     defsHTML = `<p style="color:var(--text3);text-align:center;padding:20px">
-      モニター定義がありません。「自動検出」で作成してください。</p>`;
+      ${t('monitors.noDefs')}</p>`;
   }
 
   body.innerHTML = `
     ${liveHTML}
-    <div style="font-size:13px;font-weight:500;margin-bottom:8px">登録済みモニター定義</div>
+    <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('monitors.registered')}</div>
     ${defsHTML}`;
 
   document.getElementById('settingsFooter').innerHTML = `
-    <button class="btn-primary" onclick="doAutoDetect()">&#x1f50d; 自動検出</button>`;
+    <button class="btn-primary" onclick="doAutoDetect()">${t('monitors.autoDetect')}</button>`;
 }
 
 async function doAutoDetect() {
   try {
     const defs = await invoke('auto_detect_monitors');
     S.config.monitors = defs;
-    toast('モニターを検出しました');
+    toast(t('toast.detected'));
     renderSettings();
   } catch (e) { toast(String(e), 'error'); }
 }
@@ -590,20 +814,20 @@ function editMonitorDef(key) {
   if (!m) return;
   const body = document.getElementById('settingsBody');
   body.innerHTML = `
-    <h3 style="font-size:14px;margin-bottom:12px">モニター定義の編集</h3>
-    <div class="field"><label>キー (ID)</label><input id="em-key" value="${esc(key)}" readonly style="opacity:.6"></div>
-    <div class="field"><label>表示名</label><input id="em-name" value="${esc(m.name)}"></div>
+    <h3 style="font-size:14px;margin-bottom:12px">${t('monitors.editTitle')}</h3>
+    <div class="field"><label>${t('monitors.key')}</label><input id="em-key" value="${esc(key)}" readonly style="opacity:.6"></div>
+    <div class="field"><label>${t('monitors.displayName')}</label><input id="em-name" value="${esc(m.name)}"></div>
     <div class="field-row">
       <div class="field"><label>Left</label><input id="em-left" type="number" value="${m.left}"></div>
       <div class="field"><label>Top</label><input id="em-top" type="number" value="${m.top}"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>幅</label><input id="em-w" type="number" value="${m.width}"></div>
-      <div class="field"><label>高さ</label><input id="em-h" type="number" value="${m.height}"></div>
+      <div class="field"><label>${t('monitors.width')}</label><input id="em-w" type="number" value="${m.width}"></div>
+      <div class="field"><label>${t('monitors.height')}</label><input id="em-h" type="number" value="${m.height}"></div>
     </div>`;
   document.getElementById('settingsFooter').innerHTML = `
-    <button class="btn-ghost" onclick="renderSettings()">戻る</button>
-    <button class="btn-primary" onclick="saveMonitorDef('${esc(key)}')">保存</button>`;
+    <button class="btn-ghost" onclick="renderSettings()">${t('common.back')}</button>
+    <button class="btn-primary" onclick="saveMonitorDef('${esc(key)}')">${t('common.save')}</button>`;
 }
 
 async function saveMonitorDef(key) {
@@ -616,7 +840,7 @@ async function saveMonitorDef(key) {
   };
   try {
     await invoke('save_monitors', { monitors: S.config.monitors });
-    toast('保存しました');
+    toast(t('toast.saved'));
     renderSettings();
   } catch (e) { toast(String(e), 'error'); }
 }
@@ -626,54 +850,51 @@ function renderAdvancedTab() {
   const body = document.getElementById('settingsBody');
   body.innerHTML = `
     <div style="margin-bottom:16px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">mstsc /l サイレントキャプチャテスト</div>
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.captureTest')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
-        DialogBoxIndirectParamW BPを使って mstsc /l の出力をサイレントキャプチャします。<br>
-        ダイアログ・音なしでモニターIDを取得し、正確性を確認できます。
+        ${t('adv.captureDesc')}
       </p>
-      <button class="btn-primary" id="advTestBtn" onclick="runMstscCaptureTest()">テスト実行</button>
+      <button class="btn-primary" id="advTestBtn" onclick="runMstscCaptureTest()">${t('adv.runTest')}</button>
     </div>
     <div id="advTestResult"></div>
 
     <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">フック機構テスト</div>
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.hookTest')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
-        Python で MessageBoxW を呼ぶプロセスを起動し、インラインフックが機能するか検証します。<br>
-        ダイアログが出なければフック成功、出ればフック機構自体に問題あり。
+        ${t('adv.hookDesc')}
       </p>
-      <button class="btn-primary" id="advHookTestBtn" onclick="runHookBasicTest()">フック機構テスト実行</button>
+      <button class="btn-primary" id="advHookTestBtn" onclick="runHookBasicTest()">${t('adv.runHookTest')}</button>
     </div>
     <div id="advHookTestResult"></div>
 
     <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">mstsc診断 (CreateWindowExW)</div>
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.diagnose')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
-        mstsc /l にブレークポイントを設定し、CreateWindowExW の全呼び出しをパラメータ付きで記録します。
+        ${t('adv.diagnoseDesc')}
       </p>
-      <button class="btn-primary" id="advDiagnoseBtn" onclick="runDiagnoseMstsc()">診断実行</button>
+      <button class="btn-primary" id="advDiagnoseBtn" onclick="runDiagnoseMstsc()">${t('adv.runDiagnose')}</button>
     </div>
     <div id="advDiagnoseResult"></div>
 
     <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">EnumDisplayMonitors 比較</div>
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.enumCompare')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
-        現在の EnumDisplayMonitors の結果と比較します。
+        ${t('adv.enumDesc')}
       </p>
       <div id="advEnumResult"></div>
     </div>`;
 
   document.getElementById('settingsFooter').innerHTML = '';
 
-  // Show current EnumDisplayMonitors result
   const enumEl = document.getElementById('advEnumResult');
   if (S.liveMonitors.length > 0) {
     enumEl.innerHTML = `
       <table style="width:100%;font-size:12px;font-family:var(--mono);border-collapse:collapse">
         <tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">
           <th style="padding:4px 8px">ID</th>
-          <th style="padding:4px 8px">デバイス名</th>
-          <th style="padding:4px 8px">位置</th>
-          <th style="padding:4px 8px">解像度</th>
+          <th style="padding:4px 8px">${t('adv.deviceName')}</th>
+          <th style="padding:4px 8px">${t('adv.position')}</th>
+          <th style="padding:4px 8px">${t('adv.resolution')}</th>
           <th style="padding:4px 8px">Primary</th>
         </tr>
         ${S.liveMonitors.map(m => `
@@ -687,7 +908,7 @@ function renderAdvancedTab() {
         `).join('')}
       </table>`;
   } else {
-    enumEl.innerHTML = '<p style="color:var(--text3);font-size:12px">モニターが検出されていません</p>';
+    enumEl.innerHTML = `<p style="color:var(--text3);font-size:12px">${t('adv.noMonitors')}</p>`;
   }
 }
 
@@ -695,8 +916,8 @@ async function runMstscCaptureTest() {
   const btn = document.getElementById('advTestBtn');
   const resultEl = document.getElementById('advTestResult');
   btn.disabled = true;
-  btn.textContent = '実行中...';
-  resultEl.innerHTML = '<p style="color:var(--text2);font-size:12px">mstsc /l をキャプチャ中... (最大5秒)</p>';
+  btn.textContent = t('adv.running');
+  resultEl.innerHTML = `<p style="color:var(--text2);font-size:12px">${t('adv.capturing')}</p>`;
 
   try {
     const result = await invoke('test_mstsc_capture');
@@ -720,15 +941,15 @@ async function runMstscCaptureTest() {
     if (monitors.length > 0) {
       monitorTable = `
         <div style="margin-bottom:12px">
-          <div style="font-size:12px;color:var(--text2);margin-bottom:4px">パース結果 (${monitors.length}台):</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${t('adv.parseResult')} (${monitors.length}):</div>
           <table style="width:100%;font-size:12px;font-family:var(--mono);border-collapse:collapse">
             <tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">
               <th style="padding:4px 8px">mstsc ID</th>
-              <th style="padding:4px 8px">位置</th>
-              <th style="padding:4px 8px">解像度</th>
+              <th style="padding:4px 8px">${t('adv.position')}</th>
+              <th style="padding:4px 8px">${t('adv.resolution')}</th>
               <th style="padding:4px 8px">Primary</th>
               <th style="padding:4px 8px">Enum ID</th>
-              <th style="padding:4px 8px">一致</th>
+              <th style="padding:4px 8px">${t('adv.match')}</th>
             </tr>
             ${monitors.map(mm => {
               const enumMon = S.liveMonitors.find(m =>
@@ -748,25 +969,25 @@ async function runMstscCaptureTest() {
           </table>
         </div>
         <div style="font-size:12px;padding:8px 12px;border-radius:var(--radius-sm);margin-bottom:12px;background:${idMatch ? 'rgba(61,214,140,.1)' : 'rgba(232,84,84,.1)'};color:${idMatch ? 'var(--green)' : 'var(--red)'}">
-          ${idMatch ? '\u2713 EnumDisplayMonitors と mstsc のIDは一致しています' : '\u2717 IDが一致しません \u2014 フックによるID補正が必要です'}
+          ${idMatch ? t('adv.idsMatch') : t('adv.idsMismatch')}
         </div>`;
     }
 
     resultEl.innerHTML = `
       <div style="margin-bottom:12px">
-        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">デバッグログ:</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${t('adv.debugLog')}</div>
         <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:250px;overflow-y:auto">${logLines}</pre>
       </div>
       ${rawText ? `<div style="margin-bottom:12px">
-        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">キャプチャした生テキスト:</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${t('adv.rawText')}</div>
         <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:200px;overflow-y:auto">${esc(rawText)}</pre>
-      </div>` : '<div style="color:var(--amber);font-size:12px;margin-bottom:12px;padding:8px 12px;background:rgba(240,160,64,.1);border-radius:var(--radius-sm)">テキストがキャプチャされませんでした</div>'}
+      </div>` : `<div style="color:var(--amber);font-size:12px;margin-bottom:12px;padding:8px 12px;background:rgba(240,160,64,.1);border-radius:var(--radius-sm)">${t('adv.noText')}</div>`}
       ${monitorTable}`;
   } catch (e) {
-    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">エラー: ${esc(String(e))}</div>`;
+    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">${t('adv.error')}${esc(String(e))}</div>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = 'テスト実行';
+    btn.textContent = t('adv.runTest');
   }
 }
 
@@ -774,8 +995,8 @@ async function runHookBasicTest() {
   const btn = document.getElementById('advHookTestBtn');
   const resultEl = document.getElementById('advHookTestResult');
   btn.disabled = true;
-  btn.textContent = '実行中...';
-  resultEl.innerHTML = '<p style="color:var(--text2);font-size:12px">Python MessageBoxW テスト中...</p>';
+  btn.textContent = t('adv.running');
+  resultEl.innerHTML = `<p style="color:var(--text2);font-size:12px">${t('adv.testing')}</p>`;
 
   try {
     const result = await invoke('test_hook_basic');
@@ -785,22 +1006,22 @@ async function runHookBasicTest() {
 
     let statusHtml = '';
     if (hasMarker) {
-      statusHtml = '<div style="color:var(--green);font-size:12px;padding:8px 12px;background:rgba(61,214,140,.1);border-radius:var(--radius-sm);margin-bottom:12px">フック成功: プローブが呼ばれました</div>';
+      statusHtml = `<div style="color:var(--green);font-size:12px;padding:8px 12px;background:rgba(61,214,140,.1);border-radius:var(--radius-sm);margin-bottom:12px">${t('adv.hookSuccess')}</div>`;
     } else if (sentinelIntact) {
-      statusHtml = '<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm);margin-bottom:12px">フック失敗: センチネル未変更（フック機構自体に問題あり）</div>';
+      statusHtml = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm);margin-bottom:12px">${t('adv.hookFail')}</div>`;
     }
 
     resultEl.innerHTML = `
       ${statusHtml}
       <div style="margin-bottom:12px">
-        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">デバッグログ:</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">${t('adv.debugLog')}</div>
         <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:300px;overflow-y:auto">${logLines}</pre>
       </div>`;
   } catch (e) {
-    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">エラー: ${esc(String(e))}</div>`;
+    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">${t('adv.error')}${esc(String(e))}</div>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = 'フック機構テスト実行';
+    btn.textContent = t('adv.runHookTest');
   }
 }
 
@@ -808,7 +1029,7 @@ async function runDiagnoseMstsc() {
   const btn = document.getElementById('advDiagnoseBtn');
   const resultEl = document.getElementById('advDiagnoseResult');
   btn.disabled = true;
-  btn.textContent = '診断中...';
+  btn.textContent = t('adv.diagnosing');
   resultEl.innerHTML = '';
   try {
     const result = await invoke('diagnose_mstsc');
@@ -818,10 +1039,10 @@ async function runDiagnoseMstsc() {
         <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:500px;overflow-y:auto">${logLines}</pre>
       </div>`;
   } catch (e) {
-    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">エラー: ${esc(String(e))}</div>`;
+    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">${t('adv.error')}${esc(String(e))}</div>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = '診断実行';
+    btn.textContent = t('adv.runDiagnose');
   }
 }
 
@@ -841,18 +1062,18 @@ function renderProfilesTab() {
           </div>
           ${renderMonitorPreview(key)}
         </div>
-        <button class="btn-icon" onclick="editProfile('${esc(key)}')" title="編集">&#x270e;</button>
-        <button class="btn-icon" onclick="doDeleteProfile('${esc(key)}')" title="削除">&#x1f5d1;</button>
+        <button class="btn-icon" onclick="editProfile('${esc(key)}')" title="${t('common.edit')}">&#x270e;</button>
+        <button class="btn-icon" onclick="doDeleteProfile('${esc(key)}')" title="${t('common.delete')}">&#x1f5d1;</button>
       </div>
     `).join('');
   } else {
     html = `<p style="color:var(--text3);text-align:center;padding:20px">
-      プロファイルがありません。モニターを検出してからプロファイルを作成してください。</p>`;
+      ${t('profiles.noProfiles')}</p>`;
   }
 
   body.innerHTML = html;
   document.getElementById('settingsFooter').innerHTML = `
-    <button class="btn-primary" onclick="editProfile(null)">+ 新しいプロファイル</button>`;
+    <button class="btn-primary" onclick="editProfile(null)">${t('profiles.add')}</button>`;
 }
 
 function editProfile(key) {
@@ -860,7 +1081,7 @@ function editProfile(key) {
   const monEntries = Object.entries(S.config.monitors || {}).sort((a, b) => a[1].left - b[1].left);
 
   if (monEntries.length === 0) {
-    toast('先にモニターを検出してください', 'error');
+    toast(t('profiles.detectFirst'), 'error');
     return;
   }
 
@@ -869,35 +1090,33 @@ function editProfile(key) {
   const editKey = key || `profile-${Date.now()}`;
 
   body.innerHTML = `
-    <h3 style="font-size:14px;margin-bottom:12px">${isNew ? '新しいプロファイル' : 'プロファイルの編集'}</h3>
+    <h3 style="font-size:14px;margin-bottom:12px">${isNew ? t('profiles.new') : t('profiles.edit')}</h3>
     <div class="field">
-      <label>プロファイル名</label>
-      <input id="ep-name" value="${esc(profile.name)}" placeholder="例: 左2画面">
+      <label>${t('profiles.name')}</label>
+      <input id="ep-name" value="${esc(profile.name)}" placeholder="${t('profiles.namePlaceholder')}">
     </div>
-    ${isNew ? `<div class="field"><label>キー (ID)</label><input id="ep-key" value="${esc(editKey)}" placeholder="英数字のID"></div>` : ''}
-    <div style="font-size:12px;color:var(--text2);margin:12px 0 6px">使用するモニターを選択 (クリックで選択/解除、ダブルクリックでPrimary):</div>
+    ${isNew ? `<div class="field"><label>${t('profiles.key')}</label><input id="ep-key" value="${esc(editKey)}" placeholder="${t('profiles.keyPlaceholder')}"></div>` : ''}
+    <div style="font-size:12px;color:var(--text2);margin:12px 0 6px">${t('profiles.selectMonitors')}</div>
     <div class="monitor-layout" id="ep-layout" style="min-height:160px"></div>
     <div style="font-size:11px;color:var(--text3);margin-top:4px">
-      選択中: <span id="ep-selected">${profile.monitor_ids.join(', ') || 'なし'}</span>
-      &nbsp;|&nbsp; Primary: <span id="ep-primary">${profile.primary || 'なし'}</span>
+      ${t('profiles.selected')}<span id="ep-selected">${profile.monitor_ids.join(', ') || t('profiles.none')}</span>
+      &nbsp;|&nbsp; Primary: <span id="ep-primary">${profile.primary || t('profiles.none')}</span>
     </div>`;
 
-  // Build interactive 2D layout
   const layout = document.getElementById('ep-layout');
   const state = { ids: [...profile.monitor_ids], primary: profile.primary };
 
   buildInteractiveLayout(layout, monEntries, state);
 
   document.getElementById('settingsFooter').innerHTML = `
-    <button class="btn-ghost" onclick="renderSettings()">戻る</button>
-    <button class="btn-primary" onclick="saveProfile('${esc(isNew ? '' : key)}')">保存</button>`;
+    <button class="btn-ghost" onclick="renderSettings()">${t('common.back')}</button>
+    <button class="btn-primary" onclick="saveProfile('${esc(isNew ? '' : key)}')">${t('common.save')}</button>`;
 
   layout._state = state;
   layout._monEntries = monEntries;
 }
 
 function buildInteractiveLayout(container, monEntries, state) {
-  // Calculate bounding box
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   monEntries.forEach(([, m]) => {
     minX = Math.min(minX, m.left);
@@ -959,17 +1178,17 @@ function updateProfileBoxes(wrapper, monEntries, state) {
       if (primaryEl) primaryEl.remove();
     }
   });
-  document.getElementById('ep-selected').textContent = state.ids.join(', ') || 'なし';
-  document.getElementById('ep-primary').textContent = state.primary || 'なし';
+  document.getElementById('ep-selected').textContent = state.ids.join(', ') || t('profiles.none');
+  document.getElementById('ep-primary').textContent = state.primary || t('profiles.none');
 }
 
 function areMonitorsTouching(a, b) {
-  const t = 2;
+  const tol = 2;
   const hOverlap = Math.max(a.left, b.left) < Math.min(a.left + a.width, b.left + b.width);
   const vOverlap = Math.max(a.top, b.top) < Math.min(a.top + a.height, b.top + b.height);
   if (hOverlap && vOverlap) return true;
-  const touchH = Math.abs(a.left + a.width - b.left) <= t || Math.abs(b.left + b.width - a.left) <= t;
-  const touchV = Math.abs(a.top + a.height - b.top) <= t || Math.abs(b.top + b.height - a.top) <= t;
+  const touchH = Math.abs(a.left + a.width - b.left) <= tol || Math.abs(b.left + b.width - a.left) <= tol;
+  const touchV = Math.abs(a.top + a.height - b.top) <= tol || Math.abs(b.top + b.height - a.top) <= tol;
   if (touchH && vOverlap) return true;
   if (touchV && hOverlap) return true;
   return false;
@@ -995,14 +1214,14 @@ function areMonitorsContiguous(monitorIds) {
 
 async function saveProfile(existingKey) {
   const name = document.getElementById('ep-name').value.trim();
-  if (!name) { toast('名前を入力してください', 'error'); return; }
+  if (!name) { toast(t('profiles.nameRequired'), 'error'); return; }
 
   const key = existingKey || document.getElementById('ep-key')?.value.trim() || `p-${Date.now()}`;
   const layout = document.getElementById('ep-layout');
   const state = layout._state;
 
-  if (state.ids.length === 0) { toast('モニターを1つ以上選択してください', 'error'); return; }
-  if (!areMonitorsContiguous(state.ids)) { toast('飛び地のモニター配置は選択できません。隣接するモニターを選択してください。', 'error'); return; }
+  if (state.ids.length === 0) { toast(t('profiles.selectRequired'), 'error'); return; }
+  if (!areMonitorsContiguous(state.ids)) { toast(t('profiles.notContiguous'), 'error'); return; }
   if (!state.primary) state.primary = state.ids[0];
 
   const profile = { name, monitor_ids: state.ids, primary: state.primary };
@@ -1011,13 +1230,13 @@ async function saveProfile(existingKey) {
     await invoke('save_profile', { id: key, profile });
     S.config.profiles = S.config.profiles || {};
     S.config.profiles[key] = profile;
-    toast('保存しました');
+    toast(t('toast.saved'));
     renderSettings();
   } catch (e) { toast(String(e), 'error'); }
 }
 
 async function doDeleteProfile(key) {
-  showConfirm('\u{1F5D1}', `プロファイル "${S.config.profiles[key]?.name}" を削除しますか？`, '削除', async () => {
+  showConfirm('\u{1F5D1}', t('profiles.deleteConfirm', { name: S.config.profiles[key]?.name }), t('common.delete'), async () => {
     try {
       await invoke('delete_profile', { id: key });
       delete S.config.profiles[key];
@@ -1064,31 +1283,31 @@ function showHostEditor(host) {
          style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;${c===h.color?'outline:2px solid var(--text)':''}"></div>`
   ).join('');
 
-  document.getElementById('settingsTitle').textContent = isNew ? 'ホストを追加' : 'ホストを編集';
+  document.getElementById('settingsTitle').textContent = isNew ? t('host.add') : t('host.edit');
   document.getElementById('settingsTabs').innerHTML = '';
   body.innerHTML = `
-    <div class="field"><label>表示名</label><input id="eh-name" value="${esc(h.name)}" placeholder="例: 開発サーバー"></div>
+    <div class="field"><label>${t('host.displayName')}</label><input id="eh-name" value="${esc(h.name)}" placeholder="${t('host.namePlaceholder')}"></div>
     <div class="field">
-      <label>RDPファイル</label>
+      <label>${t('host.rdpFile')}</label>
       <div style="display:flex;gap:8px">
         <input id="eh-rdp" value="${esc(h.rdp_file)}" placeholder="C:\\Users\\...\\server.rdp" style="flex:1">
-        <button class="btn-ghost" onclick="browseRdp()">参照...</button>
+        <button class="btn-ghost" onclick="browseRdp()">${t('host.browse')}</button>
       </div>
     </div>
     <div class="field">
-      <label>デフォルトプロファイル</label>
+      <label>${t('host.defaultProfile')}</label>
       <input type="hidden" id="eh-profile" value="${esc(h.default_profile)}">
-      <div id="eh-profile-list">${profileList || '<p style="color:var(--text3)">プロファイルがありません</p>'}</div>
+      <div id="eh-profile-list">${profileList || `<p style="color:var(--text3)">${t('host.noProfiles')}</p>`}</div>
     </div>
     <div class="field">
-      <label>カラータグ</label>
+      <label>${t('host.colorTag')}</label>
       <input id="eh-color" type="hidden" value="${esc(h.color || '#5b9aff')}">
       <div style="display:flex;gap:8px;margin-top:4px">${colorPicker}</div>
     </div>`;
 
   document.getElementById('settingsFooter').innerHTML = `
-    <button class="btn-ghost" onclick="closeSettings()">キャンセル</button>
-    <button class="btn-primary" onclick="saveHostFromEditor('${esc(h.id)}')">保存</button>`;
+    <button class="btn-ghost" onclick="closeSettings()">${t('common.cancel')}</button>
+    <button class="btn-primary" onclick="saveHostFromEditor('${esc(h.id)}')">${t('common.save')}</button>`;
 
   document.getElementById('settingsOverlay').classList.add('open');
 }
@@ -1125,8 +1344,8 @@ async function saveHostFromEditor(hostId) {
     default_profile: document.getElementById('eh-profile').value,
     color: document.getElementById('eh-color').value,
   };
-  if (!host.name) { toast('表示名を入力してください', 'error'); return; }
-  if (!host.rdp_file) { toast('RDPファイルを指定してください', 'error'); return; }
+  if (!host.name) { toast(t('host.nameRequired'), 'error'); return; }
+  if (!host.rdp_file) { toast(t('host.rdpRequired'), 'error'); return; }
 
   try {
     await invoke('save_host', { host });
@@ -1134,12 +1353,12 @@ async function saveHostFromEditor(hostId) {
     if (idx >= 0) S.config.hosts[idx] = host;
     else S.config.hosts.push(host);
     closeSettings();
-    toast('保存しました');
+    toast(t('toast.saved'));
   } catch (e) { toast(String(e), 'error'); }
 }
 
 async function deleteHost(id, name) {
-  showConfirm('\u{1F5D1}', `"${name}" を削除しますか？`, '削除', async () => {
+  showConfirm('\u{1F5D1}', t('host.deleteConfirm', { name }), t('common.delete'), async () => {
     try {
       await invoke('delete_host', { id });
       S.config.hosts = S.config.hosts.filter(h => h.id !== id);
@@ -1152,7 +1371,6 @@ async function deleteHost(id, name) {
 function setupDragDrop() {
   const dropEl = document.getElementById('dropOverlay');
 
-  // Try Tauri 2 webviewWindow.onDragDropEvent (preferred)
   const getCurrent = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow;
   if (getCurrent) {
     const win = getCurrent();
@@ -1172,7 +1390,6 @@ function setupDragDrop() {
       }
     });
   } else {
-    // Fallback: try event.listen
     const listen = window.__TAURI__?.event?.listen;
     if (listen) {
       listen('tauri://drag-enter', () => dropEl.classList.add('visible'));
@@ -1189,7 +1406,6 @@ function setupDragDrop() {
     }
   }
 
-  // Fallback HTML5 drag/drop (for dev mode without Tauri)
   if (!window.__TAURI__) {
     document.body.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -1209,7 +1425,6 @@ async function handleRdpDrop(filePath) {
   try {
     const info = await invoke('import_rdp', { path: filePath });
     if (info) {
-      // Open host editor pre-filled
       showHostEditor({
         id: `host-${Date.now()}`,
         name: info.host || '',
@@ -1219,7 +1434,7 @@ async function handleRdpDrop(filePath) {
       });
     }
   } catch (e) {
-    toast(`RDP読み込みエラー: ${e}`, 'error');
+    toast(`${t('import.error')}${e}`, 'error');
   }
 }
 

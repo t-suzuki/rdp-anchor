@@ -37,6 +37,12 @@ pub struct AppConfig {
     pub profiles: HashMap<String, DisplayProfile>,
     #[serde(default)]
     pub hosts: Vec<HostEntry>,
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+fn default_language() -> String {
+    "ja".to_string()
 }
 
 impl Default for AppConfig {
@@ -45,6 +51,7 @@ impl Default for AppConfig {
             monitors: HashMap::new(),
             profiles: HashMap::new(),
             hosts: Vec::new(),
+            language: default_language(),
         }
     }
 }

@@ -28,6 +28,7 @@ struct ConnectResult {
     message: String,
     needs_confirm: bool,
     host: String,
+    host_name: String,
 }
 
 #[tauri::command]
@@ -144,16 +145,10 @@ fn preflight_connect(
 
     Ok(ConnectResult {
         success: true,
-        message: if is_connected {
-            format!(
-                "{}({})に既に接続中です。再接続すると既存のセッションが切断されます。",
-                host.name, rdp_host
-            )
-        } else {
-            String::new()
-        },
+        message: String::new(),
         needs_confirm: is_connected,
         host: rdp_host,
+        host_name: host.name.clone(),
     })
 }
 
@@ -192,7 +187,7 @@ fn connect(
     cmd.spawn()
         .map_err(|e| format!("Failed to launch mstsc: {e}"))?;
 
-    Ok(format!("接続開始: {} (monitors: {})", host.name, selected))
+    Ok(format!("{}|{}", host.name, selected))
 }
 
 #[tauri::command]
@@ -205,7 +200,7 @@ fn browse_rdp_file() -> Result<Option<rdp::RdpInfo>, String> {
         Add-Type -AssemblyName System.Windows.Forms
         $d = New-Object System.Windows.Forms.OpenFileDialog
         $d.Filter = 'RDP Files (*.rdp)|*.rdp|All Files (*.*)|*.*'
-        $d.Title = 'RDPファイルを選択'
+        $d.Title = 'Select RDP File'
         if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }
         "#,
     ]);
