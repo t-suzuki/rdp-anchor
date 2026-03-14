@@ -14,8 +14,6 @@ struct AppState {
     config: Mutex<AppConfig>,
 }
 
-// ─── Data types for frontend ────────────────────────────────────────
-
 #[derive(Serialize)]
 struct FullState {
     config: AppConfig,
@@ -27,14 +25,10 @@ struct FullState {
 struct ConnectResult {
     success: bool,
     message: String,
-    /// true if a session was already active and user needs to confirm
     needs_confirm: bool,
     host: String,
 }
 
-// ─── Commands ───────────────────────────────────────────────────────
-
-/// Get everything the frontend needs in one call (fast startup)
 #[tauri::command]
 fn get_state(state: State<AppState>) -> Result<FullState, String> {
     let config = state.config.lock().map_err(|e| e.to_string())?;
@@ -48,25 +42,21 @@ fn get_state(state: State<AppState>) -> Result<FullState, String> {
     })
 }
 
-/// Refresh just the live monitor list
 #[tauri::command]
 fn refresh_monitors() -> Result<Vec<LiveMonitor>, String> {
     monitor::get_current_monitors()
 }
 
-/// Refresh active sessions
 #[tauri::command]
 fn refresh_sessions() -> Vec<session::ActiveSession> {
     session::get_active_sessions()
 }
 
-/// Auto-detect monitors and generate definitions
 #[tauri::command]
 fn auto_detect_monitors(state: State<AppState>) -> Result<HashMap<String, MonitorDef>, String> {
     let live = monitor::get_current_monitors()?;
     let defs = monitor::auto_detect_defs(&live);
 
-    // Save to config
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     config.monitors = defs.clone();
     config.save()?;
@@ -74,7 +64,6 @@ fn auto_detect_monitors(state: State<AppState>) -> Result<HashMap<String, Monito
     Ok(defs)
 }
 
-/// Save monitor definitions
 #[tauri::command]
 fn save_monitors(
     state: State<AppState>,
@@ -85,19 +74,13 @@ fn save_monitors(
     config.save()
 }
 
-/// Save a display profile
 #[tauri::command]
-fn save_profile(
-    state: State<AppState>,
-    id: String,
-    profile: DisplayProfile,
-) -> Result<(), String> {
+fn save_profile(state: State<AppState>, id: String, profile: DisplayProfile) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     config.profiles.insert(id, profile);
     config.save()
 }
 
-/// Delete a display profile
 #[tauri::command]
 fn delete_profile(state: State<AppState>, id: String) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
@@ -105,7 +88,6 @@ fn delete_profile(state: State<AppState>, id: String) -> Result<(), String> {
     config.save()
 }
 
-/// Add or update a host entry
 #[tauri::command]
 fn save_host(state: State<AppState>, host: HostEntry) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
@@ -117,7 +99,6 @@ fn save_host(state: State<AppState>, host: HostEntry) -> Result<(), String> {
     config.save()
 }
 
-/// Delete a host entry
 #[tauri::command]
 fn delete_host(state: State<AppState>, id: String) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
@@ -125,7 +106,6 @@ fn delete_host(state: State<AppState>, id: String) -> Result<(), String> {
     config.save()
 }
 
-/// Save complete config at once (for bulk edits)
 #[tauri::command]
 fn save_config(state: State<AppState>, new_config: AppConfig) -> Result<(), String> {
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
@@ -133,7 +113,6 @@ fn save_config(state: State<AppState>, new_config: AppConfig) -> Result<(), Stri
     config.save()
 }
 
-/// Pre-flight check: resolve the profile and check for conflicts
 #[tauri::command]
 fn preflight_connect(
     state: State<AppState>,
@@ -154,11 +133,9 @@ fn preflight_connect(
         .get(profile_key)
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
-    // Resolve monitor IDs
     let live = monitor::get_current_monitors()?;
     let _selected = monitor::resolve_profile(&config, profile, &live)?;
 
-    // Check for active session
     let rdp_host = rdp::read_rdp_host(&host.rdp_file).unwrap_or_default();
     let is_connected = session::is_host_connected(&rdp_host);
 
@@ -177,7 +154,6 @@ fn preflight_connect(
     })
 }
 
-/// Actually connect: resolve monitors → patch .rdp → launch mstsc
 #[tauri::command]
 fn connect(
     state: State<AppState>,
@@ -198,26 +174,19 @@ fn connect(
         .get(profile_key)
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
-    // Resolve monitor IDs
     let live = monitor::get_current_monitors()?;
     let selected = monitor::resolve_profile(&config, profile, &live)?;
 
-    // Patch .rdp and get temp file path
     let launch_rdp = rdp::prepare_rdp_for_launch(&host.rdp_file, &selected)?;
 
-    // Launch mstsc
     std::process::Command::new("mstsc.exe")
         .arg(&launch_rdp)
         .spawn()
         .map_err(|e| format!("Failed to launch mstsc: {e}"))?;
 
-    Ok(format!(
-        "接続開始: {} (monitors: {})",
-        host.name, selected
-    ))
+    Ok(format!("接続開始: {} (monitors: {})", host.name, selected))
 }
 
-/// Browse for an .rdp file using a system file dialog (via PowerShell)
 #[tauri::command]
 fn browse_rdp_file() -> Result<Option<rdp::RdpInfo>, String> {
     let output = std::process::Command::new("powershell")
@@ -241,8 +210,6 @@ fn browse_rdp_file() -> Result<Option<rdp::RdpInfo>, String> {
     }
     rdp::read_rdp_info(&path).map(Some)
 }
-
-// ─── App entry ──────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

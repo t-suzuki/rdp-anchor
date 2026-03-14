@@ -1,13 +1,11 @@
 use std::fs;
 use std::path::Path;
 
-/// Read the hostname (full address) from an .rdp file
 pub fn read_rdp_host(path: &str) -> Result<String, String> {
     let content = read_rdp_file(path)?;
     for line in content.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("full address:s:") {
-            // Strip optional port
             let host = rest.split(':').next().unwrap_or(rest);
             return Ok(host.to_string());
         }
@@ -15,13 +13,7 @@ pub fn read_rdp_host(path: &str) -> Result<String, String> {
     Err(format!("No 'full address' found in {}", path))
 }
 
-/// Patch an .rdp file with the correct selectedmonitors value,
-/// write to a temp copy, and return the temp path.
-/// The original .rdp is never modified — we work on a copy.
-pub fn prepare_rdp_for_launch(
-    rdp_path: &str,
-    selected_monitors: &str,
-) -> Result<String, String> {
+pub fn prepare_rdp_for_launch(rdp_path: &str, selected_monitors: &str) -> Result<String, String> {
     let content = read_rdp_file(rdp_path)?;
 
     let mut lines: Vec<String> = Vec::new();
@@ -56,7 +48,6 @@ pub fn prepare_rdp_for_launch(
         lines.push(format!("selectedmonitors:s:{}", selected_monitors));
     }
 
-    // Write to a temp file next to the original
     let original = Path::new(rdp_path);
     let stem = original.file_stem().unwrap_or_default().to_string_lossy();
     let dir = original.parent().unwrap_or_else(|| Path::new("."));
@@ -69,26 +60,19 @@ pub fn prepare_rdp_for_launch(
     Ok(temp_path.to_string_lossy().to_string())
 }
 
-/// Read an .rdp file, handling both UTF-8 and UTF-16 LE (Windows default)
 fn read_rdp_file(path: &str) -> Result<String, String> {
     let raw = fs::read(path).map_err(|e| format!("Cannot read {}: {}", path, e))?;
 
-    // Check for UTF-16 LE BOM (0xFF 0xFE)
     if raw.len() >= 2 && raw[0] == 0xFF && raw[1] == 0xFE {
         let (decoded, _, _) = encoding_rs::UTF_16LE.decode(&raw[2..]);
         Ok(decoded.into_owned())
-    }
-    // Check for UTF-8 BOM (0xEF 0xBB 0xBF)
-    else if raw.len() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF {
-        String::from_utf8(raw[3..].to_vec())
-            .map_err(|e| format!("UTF-8 decode error: {e}"))
+    } else if raw.len() >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF {
+        String::from_utf8(raw[3..].to_vec()).map_err(|e| format!("UTF-8 decode error: {e}"))
     } else {
-        // Try UTF-8, fallback to lossy
         Ok(String::from_utf8_lossy(&raw).into_owned())
     }
 }
 
-/// Extract useful metadata from an .rdp file for display
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RdpInfo {
     pub host: String,

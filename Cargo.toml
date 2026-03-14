@@ -3,6 +3,7 @@ name = "rdp-launcher"
 version = "1.0.0"
 edition = "2021"
 description = "RDP multi-monitor launcher that survives reboot ID changes"
+build = "build.rs"
 
 [lib]
 name = "rdp_launcher_lib"

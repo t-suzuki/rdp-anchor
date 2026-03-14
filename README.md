@@ -83,7 +83,10 @@ mstsc.exe <temp>.rdp で起動
 cargo tauri build
 ```
 
-成果物: `src-tauri/target/release/rdp-launcher.exe` (または .msi インストーラーが `src-tauri/target/release/bundle/` に生成)
+成果物: `target/release/rdp-launcher.exe`
+
+このリポジトリでは現状 `bundle.active` を `false` にしているため、まずはアプリ本体のビルドに集中する構成にしている。
+インストーラー生成を有効にする場合は `icons/` を追加してから `tauri.conf.json` の `bundle.active` を戻す。
 
 ### 開発モード
 
@@ -93,7 +96,7 @@ cargo tauri dev
 
 ### アイコン生成 (初回のみ)
 
-`src-tauri/icons/` に以下が必要:
+`icons/` に以下が必要:
 - `32x32.png`
 - `128x128.png`
 - `icon.ico`
