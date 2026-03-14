@@ -44,7 +44,7 @@
     ],
     "windows": {
       "wix": {
-        "language": "ja-JP"
+        "language": ["en-US", "ja-JP"]
       }
     }
   }
