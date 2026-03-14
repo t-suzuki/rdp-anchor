@@ -964,7 +964,8 @@ fn capture_mstsc_bp_inner(logs: &mut Vec<String>) -> Result<(String, Vec<LiveMon
     let mut dll_count = 0u32;
     let mut bp_exception_count = 0u32;
     let mut other_exception_count = 0u32;
-    let mut exit_reason = "timeout";
+    #[allow(unused_assignments)]
+    let mut exit_reason = "";
 
     // Helper closure: try to set int3 BP at dbip_addr, verify it was written
     let try_set_bp = |h_process: HANDLE, orig: &mut u8, already_set: &mut bool, logs: &mut Vec<String>, context: &str| {
@@ -1326,7 +1327,7 @@ fn capture_debug_target(cmd: &str) -> Result<CaptureResult, String> {
 
     let mut event_count = 0u32;
     let mut dll_count = 0u32;
-    let mut all_exited = false;
+    let mut _all_exited = false;
     let mut captured_bufs: Vec<Vec<u8>> = Vec::new();
 
     fn read_proc_sentinel(
@@ -1509,7 +1510,7 @@ fn capture_debug_target(cmd: &str) -> Result<CaptureResult, String> {
                     unsafe {
                         let _ = ContinueDebugEvent(event_pid, event.dwThreadId, DBG_CONTINUE);
                     }
-                    all_exited = true;
+                    _all_exited = true;
                     break;
                 }
                 DBG_CONTINUE

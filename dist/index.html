@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>RDP Launcher</title>
+<title>RDP Launcher v0.0.1</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -31,7 +31,7 @@ button{font-family:var(--font);font-size:13px;cursor:pointer;border:none;border-
 .btn-primary:hover{background:var(--accent-dim)}
 .btn-ghost{background:transparent;color:var(--text2);border:1px solid var(--border)}
 .btn-ghost:hover{background:var(--card);color:var(--text);border-color:var(--border-light)}
-.btn-icon{background:transparent;color:var(--text2);width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius-sm)}
+.btn-icon{background:transparent;color:var(--text2);width:36px;height:36px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);font-size:18px}
 .btn-icon:hover{background:var(--card);color:var(--text)}
 .btn-danger{background:transparent;color:var(--red);border:1px solid rgba(232,84,84,.25)}
 .btn-danger:hover{background:rgba(232,84,84,.1)}
@@ -51,7 +51,7 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .host-card:hover{border-color:var(--border-light)}
 .host-card .card-head{display:flex;align-items:flex-start;gap:10px}
 .host-card .card-head .info{flex:1;min-width:0}
-.host-card .card-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.host-card .card-name{font-size:18px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .host-card .card-host{font-size:12px;color:var(--text2);font-family:var(--mono);margin-top:2px}
 .host-card .card-actions{display:flex;gap:4px}
 
@@ -68,6 +68,9 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
 /* Monitor mini-preview (2D layout) */
 .monitor-preview{padding:4px 0}
+.monitor-preview .monitor-box{pointer-events:none;cursor:default}
+.monitor-preview .monitor-box:hover{border-color:var(--border-light)}
+.monitor-preview .mon-primary{display:none}
 
 /* ─ Add host button ─ */
 .add-card{background:transparent;border:2px dashed var(--border);border-radius:var(--radius);padding:40px 16px;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text3);font-size:14px;cursor:pointer;transition:all .15s}
@@ -130,22 +133,28 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .drop-overlay{position:fixed;inset:0;background:rgba(91,154,255,.12);border:3px dashed var(--accent);z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .15s}
 .drop-overlay.visible{opacity:1}
 .drop-overlay span{font-size:18px;color:var(--accent);font-weight:500;background:var(--surface);padding:16px 32px;border-radius:var(--radius);border:1px solid var(--accent)}
+
+/* ─ Host card drag reorder ─ */
+.host-card.dragging{opacity:0.4}
+.host-card.drag-over{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.card-grip{color:var(--text3);cursor:grab;font-size:16px;padding:0 2px;user-select:none;line-height:1;touch-action:none}
+.card-grip:hover{color:var(--text2)}
 </style>
 </head>
 <body>
 
 <header>
-  <h1>RDP Launcher</h1>
+  <h1>RDP Launcher <span style="font-size:11px;font-weight:400;color:var(--text3)">v0.0.1</span></h1>
   <span id="fallbackBadge" style="display:none;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--amber);color:#000;font-weight:600;white-space:nowrap" title="mstsc BP capture failed. Monitor IDs may be incorrect after reboot.">ID fallback</span>
-  <button class="btn-icon" onclick="refreshAll()" title="更新">&#x21bb;</button>
-  <button class="btn-ghost" onclick="openSettings()">&#x2699; 設定</button>
+  <a href="#" onclick="event.preventDefault();openGitHub()" style="-webkit-app-region:no-drag;color:var(--text2);font-size:18px;line-height:1;text-decoration:none;padding:4px" title="GitHub: t-suzuki/rdp-launcher"><svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+  <button class="btn-ghost" onclick="openSettings()" style="font-size:15px">&#x2699; 設定</button>
 </header>
 
 <main id="main"></main>
 
 <!-- Settings modal -->
 <div class="overlay" id="settingsOverlay" onclick="if(event.target===this)closeSettings()">
-<div class="modal">
+<div class="modal" style="height:80vh">
   <div class="modal-header">
     <h2 id="settingsTitle">設定</h2>
     <button class="btn-icon" onclick="closeSettings()">&#x2715;</button>
@@ -277,6 +286,70 @@ function renderLayout2D(monitors, opts = {}) {
   return `<div style="position:relative;width:${sW}px;height:${sH}px;margin:0 auto">${boxes}</div>`;
 }
 
+// ─── Pointer-event card reorder ─────────────────────────────────────
+let sortState = null;
+function initCardSort(e, idx) {
+  e.preventDefault();
+  const card = e.target.closest('.host-card');
+  if (!card) return;
+  const grid = card.parentNode;
+  const cards = [...grid.querySelectorAll('.host-card')];
+  const rects = cards.map(c => c.getBoundingClientRect());
+  sortState = { idx, card, grid, cards, rects, startY: e.clientY, moved: false };
+  card.classList.add('dragging');
+  card.style.zIndex = '999';
+  document.addEventListener('pointermove', onSortMove);
+  document.addEventListener('pointerup', onSortEnd);
+}
+function onSortMove(e) {
+  if (!sortState) return;
+  sortState.moved = true;
+  const { rects, cards, idx } = sortState;
+  const y = e.clientY;
+  for (let i = 0; i < cards.length; i++) {
+    if (i === idx) continue;
+    const r = rects[i];
+    const midY = r.top + r.height / 2;
+    if (y > r.top && y < r.bottom) {
+      cards[i].classList.add('drag-over');
+      sortState.targetIdx = i;
+    } else {
+      cards[i].classList.remove('drag-over');
+    }
+  }
+}
+function onSortEnd(e) {
+  document.removeEventListener('pointermove', onSortMove);
+  document.removeEventListener('pointerup', onSortEnd);
+  if (!sortState) return;
+  const { idx, cards, targetIdx } = sortState;
+  cards.forEach(c => c.classList.remove('dragging', 'drag-over'));
+  if (sortState.card) sortState.card.style.zIndex = '';
+  if (sortState.moved && targetIdx != null && targetIdx !== idx) {
+    const hosts = S.config.hosts;
+    const [moved] = hosts.splice(idx, 1);
+    hosts.splice(targetIdx, 0, moved);
+    invoke('save_config', { newConfig: S.config }).catch(err => console.error(err));
+    renderMain();
+  }
+  sortState = null;
+}
+
+function updateCardPreview(hostId, profileId) {
+  const el = document.getElementById(`card-preview-${hostId}`);
+  if (el) el.innerHTML = renderMonitorPreviewInner(profileId);
+}
+
+function openGitHub() {
+  const url = 'https://github.com/t-suzuki/rdp-launcher';
+  const t = window.__TAURI__;
+  if (t) {
+    const shell = t['plugin:shell'];
+    if (shell?.open) { shell.open(url); return; }
+  }
+  window.open(url, '_blank');
+}
+
 // ─── Main view ──────────────────────────────────────────────────────
 function renderMain() {
   const el = document.getElementById('main');
@@ -294,10 +367,7 @@ function renderMain() {
     return;
   }
 
-  const profileOptions = Object.entries(S.config.profiles || {})
-    .map(([k, v]) => `<option value="${esc(k)}">${esc(v.name)}</option>`).join('');
-
-  let cards = hosts.map(h => {
+  let cards = hosts.map((h, idx) => {
     const rdpHost = h.rdp_file.split(/[/\\]/).pop().replace('.rdp', '');
     const sess = S.activeSessions.find(s =>
       s.hostname.toLowerCase().includes(h.name.toLowerCase()) ||
@@ -306,9 +376,17 @@ function renderMain() {
     const isActive = !!sess;
     const colorStyle = h.color ? `background:${h.color}` : `background:var(--accent)`;
 
+    const profileOptions = Object.entries(S.config.profiles || {})
+      .map(([k, v]) => {
+        const isDefault = k === h.default_profile;
+        const label = isDefault ? `${v.name}\uff08\u30c7\u30d5\u30a9\u30eb\u30c8\uff09` : v.name;
+        return `<option value="${esc(k)}">${esc(label)}</option>`;
+      }).join('');
+
     return `
-    <div class="host-card">
+    <div class="host-card" ondblclick="doConnect('${esc(h.id)}')">
       <div class="card-head">
+        <span class="card-grip" onpointerdown="initCardSort(event,${idx})">&#x2630;</span>
         <div class="color-tag" style="${colorStyle}"></div>
         <div class="status ${isActive ? 'active' : 'inactive'}"></div>
         <div class="info">
@@ -316,21 +394,21 @@ function renderMain() {
           <div class="card-host">${esc(rdpHost)}</div>
         </div>
         <div class="card-actions">
-          <button class="btn-icon" onclick="editHostDialog('${esc(h.id)}')" title="編集">&#x270e;</button>
-          <button class="btn-icon" onclick="deleteHost('${esc(h.id)}','${esc(h.name)}')" title="削除">&#x1f5d1;</button>
+          <button class="btn-icon" onclick="event.stopPropagation();editHostDialog('${esc(h.id)}')" title="編集">&#x270e;</button>
+          <button class="btn-icon" onclick="event.stopPropagation();deleteHost('${esc(h.id)}','${esc(h.name)}')" title="削除">&#x1f5d1;</button>
         </div>
       </div>
-      ${renderMonitorPreview(h.default_profile)}
+      <div class="monitor-preview" id="card-preview-${esc(h.id)}">${renderMonitorPreviewInner(h.default_profile)}</div>
+      <button class="btn-connect ${isActive ? 'connected' : ''}"
+              onclick="event.stopPropagation();doConnect('${esc(h.id)}')">
+        ${isActive ? '\u25cf 接続中 \u2014 再接続' : '接続'}
+      </button>
       <div class="profile-row">
         <label>Profile:</label>
-        <select class="profile-select" id="profile-${esc(h.id)}">
+        <select class="profile-select" id="profile-${esc(h.id)}" onchange="updateCardPreview('${esc(h.id)}',this.value)">
           ${profileOptions}
         </select>
       </div>
-      <button class="btn-connect ${isActive ? 'connected' : ''}"
-              onclick="doConnect('${esc(h.id)}')">
-        ${isActive ? '\u25cf 接続中 \u2014 再接続' : '接続'}
-      </button>
     </div>`;
   }).join('');
 
@@ -346,7 +424,7 @@ function renderMain() {
   });
 }
 
-function renderMonitorPreview(profileId) {
+function renderMonitorPreviewInner(profileId) {
   const profile = S.config.profiles?.[profileId];
   if (!profile) return '';
 
@@ -359,7 +437,7 @@ function renderMonitorPreview(profileId) {
     _isPrimary: key === profile.primary,
   }));
 
-  return `<div class="monitor-preview">${renderLayout2D(mons, {
+  return renderLayout2D(mons, {
     maxW: 240,
     maxH: 80,
     labelFn: (m) => {
@@ -370,7 +448,13 @@ function renderMonitorPreview(profileId) {
       const sel = profile.monitor_ids.includes(m._key);
       return 'monitor-box' + (sel ? ' selected' : '');
     },
-  })}</div>`;
+  });
+}
+
+function renderMonitorPreview(profileId) {
+  const inner = renderMonitorPreviewInner(profileId);
+  if (!inner) return '';
+  return `<div class="monitor-preview">${inner}</div>`;
 }
 
 // ─── Connect flow ───────────────────────────────────────────────────
@@ -425,6 +509,7 @@ function closeConfirm() { document.getElementById('confirmOverlay').classList.re
 // ─── Settings ───────────────────────────────────────────────────────
 function openSettings(tab) {
   S.settingsTab = tab || 'profiles';
+  document.getElementById('settingsTitle').textContent = '設定';
   renderSettings();
   document.getElementById('settingsOverlay').classList.add('open');
 }
@@ -754,6 +839,7 @@ function renderProfilesTab() {
           <div style="font-size:11px;color:var(--text3)">
             Monitors: ${p.monitor_ids.join(', ')} \u00b7 Primary: ${esc(p.primary)}
           </div>
+          ${renderMonitorPreview(key)}
         </div>
         <button class="btn-icon" onclick="editProfile('${esc(key)}')" title="編集">&#x270e;</button>
         <button class="btn-icon" onclick="doDeleteProfile('${esc(key)}')" title="削除">&#x1f5d1;</button>
@@ -877,6 +963,36 @@ function updateProfileBoxes(wrapper, monEntries, state) {
   document.getElementById('ep-primary').textContent = state.primary || 'なし';
 }
 
+function areMonitorsTouching(a, b) {
+  const t = 2;
+  const hOverlap = Math.max(a.left, b.left) < Math.min(a.left + a.width, b.left + b.width);
+  const vOverlap = Math.max(a.top, b.top) < Math.min(a.top + a.height, b.top + b.height);
+  if (hOverlap && vOverlap) return true;
+  const touchH = Math.abs(a.left + a.width - b.left) <= t || Math.abs(b.left + b.width - a.left) <= t;
+  const touchV = Math.abs(a.top + a.height - b.top) <= t || Math.abs(b.top + b.height - a.top) <= t;
+  if (touchH && vOverlap) return true;
+  if (touchV && hOverlap) return true;
+  return false;
+}
+
+function areMonitorsContiguous(monitorIds) {
+  if (monitorIds.length <= 1) return true;
+  const mons = monitorIds.map(id => S.config.monitors[id]).filter(Boolean);
+  if (mons.length <= 1) return true;
+  const visited = new Set([0]);
+  const queue = [0];
+  while (queue.length > 0) {
+    const i = queue.shift();
+    for (let j = 0; j < mons.length; j++) {
+      if (!visited.has(j) && areMonitorsTouching(mons[i], mons[j])) {
+        visited.add(j);
+        queue.push(j);
+      }
+    }
+  }
+  return visited.size === mons.length;
+}
+
 async function saveProfile(existingKey) {
   const name = document.getElementById('ep-name').value.trim();
   if (!name) { toast('名前を入力してください', 'error'); return; }
@@ -886,6 +1002,7 @@ async function saveProfile(existingKey) {
   const state = layout._state;
 
   if (state.ids.length === 0) { toast('モニターを1つ以上選択してください', 'error'); return; }
+  if (!areMonitorsContiguous(state.ids)) { toast('飛び地のモニター配置は選択できません。隣接するモニターを選択してください。', 'error'); return; }
   if (!state.primary) state.primary = state.ids[0];
 
   const profile = { name, monitor_ids: state.ids, primary: state.primary };
@@ -900,7 +1017,7 @@ async function saveProfile(existingKey) {
 }
 
 async function doDeleteProfile(key) {
-  showConfirm('\u1f5d1', `プロファイル "${S.config.profiles[key]?.name}" を削除しますか？`, '削除', async () => {
+  showConfirm('\u{1F5D1}', `プロファイル "${S.config.profiles[key]?.name}" を削除しますか？`, '削除', async () => {
     try {
       await invoke('delete_profile', { id: key });
       delete S.config.profiles[key];
@@ -925,9 +1042,21 @@ function showHostEditor(host) {
   const profiles = Object.entries(S.config.profiles || {});
 
   const body = document.getElementById('settingsBody');
-  const profileOpts = profiles.map(([k, v]) =>
-    `<option value="${esc(k)}" ${k === h.default_profile ? 'selected' : ''}>${esc(v.name)}</option>`
-  ).join('');
+
+  const profileList = profiles.map(([k, v]) => {
+    const sel = k === h.default_profile;
+    return `
+      <div class="eh-profile-item${sel ? ' selected' : ''}" data-key="${esc(k)}"
+           onclick="selectEditorProfile('${esc(k)}')"
+           style="display:flex;align-items:center;gap:10px;padding:10px;border:1px solid ${sel ? 'var(--accent)' : 'var(--border)'};border-radius:var(--radius-sm);cursor:pointer;background:${sel ? 'var(--accent-bg)' : 'transparent'};margin-bottom:6px;transition:all .15s">
+        <div style="flex:1">
+          <div style="font-weight:500">${esc(v.name)}</div>
+          <div style="font-size:11px;color:var(--text3)">Monitors: ${v.monitor_ids.join(', ')}</div>
+          ${renderMonitorPreview(k)}
+        </div>
+        <div data-check style="color:var(--accent);font-size:16px;font-weight:bold;width:20px;text-align:center;flex-shrink:0;visibility:${sel ? 'visible' : 'hidden'}">\u2713</div>
+      </div>`;
+  }).join('');
 
   const colors = ['#5b9aff','#3dd68c','#f0a040','#e85454','#c084fc','#f472b6','#38bdf8','#a3a3a3'];
   const colorPicker = colors.map(c =>
@@ -948,7 +1077,8 @@ function showHostEditor(host) {
     </div>
     <div class="field">
       <label>デフォルトプロファイル</label>
-      <select id="eh-profile">${profileOpts}</select>
+      <input type="hidden" id="eh-profile" value="${esc(h.default_profile)}">
+      <div id="eh-profile-list">${profileList || '<p style="color:var(--text3)">プロファイルがありません</p>'}</div>
     </div>
     <div class="field">
       <label>カラータグ</label>
@@ -961,6 +1091,18 @@ function showHostEditor(host) {
     <button class="btn-primary" onclick="saveHostFromEditor('${esc(h.id)}')">保存</button>`;
 
   document.getElementById('settingsOverlay').classList.add('open');
+}
+
+function selectEditorProfile(key) {
+  document.getElementById('eh-profile').value = key;
+  document.querySelectorAll('.eh-profile-item').forEach(el => {
+    const isSelected = el.dataset.key === key;
+    el.classList.toggle('selected', isSelected);
+    el.style.borderColor = isSelected ? 'var(--accent)' : 'var(--border)';
+    el.style.background = isSelected ? 'var(--accent-bg)' : 'transparent';
+    const check = el.querySelector('[data-check]');
+    if (check) check.style.visibility = isSelected ? 'visible' : 'hidden';
+  });
 }
 
 async function browseRdp() {
@@ -997,7 +1139,7 @@ async function saveHostFromEditor(hostId) {
 }
 
 async function deleteHost(id, name) {
-  showConfirm('\u1f5d1', `"${name}" を削除しますか？`, '削除', async () => {
+  showConfirm('\u{1F5D1}', `"${name}" を削除しますか？`, '削除', async () => {
     try {
       await invoke('delete_host', { id });
       S.config.hosts = S.config.hosts.filter(h => h.id !== id);
