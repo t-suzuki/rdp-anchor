@@ -97,6 +97,7 @@
 - **Rust**: https://rustup.rs/ からインストール
 - **Tauri CLI**: `cargo install tauri-cli` (v2)
 - **Windows 10 1903以降** (mstsc /l のサポートとWebView2)
+- **WiX Toolset v3**: MSIインストーラー生成に必要 (Tauri が自動でダウンロードするため手動インストール不要)
 
 ### ビルド
 
@@ -104,10 +105,9 @@
 cargo tauri build
 ```
 
-成果物: `target/release/rdp-launcher.exe`
-
-`bundle.active` は `false` のため、アプリ本体のみビルドされる。
-インストーラー生成を有効にする場合は `tauri.conf.json` の `bundle.active` を `true` に変更。
+成果物:
+- 実行ファイル: `target/release/rdp-launcher.exe`
+- MSIインストーラー: `target/release/bundle/msi/RDP Launcher_0.0.1_x64_ja-JP.msi`
 
 ### 開発モード
 
