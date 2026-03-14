@@ -19,7 +19,8 @@
         "minHeight": 480,
         "center": true,
         "resizable": true,
-        "decorations": true
+        "decorations": true,
+        "dragDropEnabled": true
       }
     ],
     "security": {

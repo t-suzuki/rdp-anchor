@@ -18,6 +18,7 @@
 }
 html,body{height:100%;font-family:var(--font);font-size:14px;color:var(--text);background:var(--bg)}
 body{display:flex;flex-direction:column;overflow:hidden;user-select:none}
+pre,code,.mono-selectable{user-select:text!important;-webkit-user-select:text!important}
 
 /* ─ Header ─ */
 header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--surface);-webkit-app-region:drag}
@@ -65,11 +66,8 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .profile-select{flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font)}
 .profile-select:focus{outline:none;border-color:var(--accent)}
 
-/* Monitor mini-preview */
-.monitor-preview{display:flex;gap:2px;align-items:end;padding:4px 0}
-.monitor-mini{border:1px solid var(--border-light);border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text3);background:var(--surface)}
-.monitor-mini.selected{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
-.monitor-mini.primary{border-color:var(--accent);border-width:2px}
+/* Monitor mini-preview (2D layout) */
+.monitor-preview{padding:4px 0}
 
 /* ─ Add host button ─ */
 .add-card{background:transparent;border:2px dashed var(--border);border-radius:var(--radius);padding:40px 16px;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--text3);font-size:14px;cursor:pointer;transition:all .15s}
@@ -104,14 +102,14 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .field-row{display:flex;gap:10px}
 .field-row .field{flex:1}
 
-/* ─ Monitor layout editor ─ */
-.monitor-layout{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:12px 0;min-height:120px;display:flex;align-items:center;justify-content:center;gap:4px}
-.monitor-box{border:2px solid var(--border-light);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s;position:relative}
+/* ─ Monitor layout editor (2D) ─ */
+.monitor-layout{position:relative;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin:12px 0;min-height:120px;display:flex;align-items:center;justify-content:center}
+.monitor-box{border:2px solid var(--border-light);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s;position:absolute;overflow:hidden}
 .monitor-box:hover{border-color:var(--text2)}
 .monitor-box.selected{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
-.monitor-box .mon-label{font-weight:500;font-size:12px}
+.monitor-box .mon-label{font-weight:500;font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90%;line-height:1.2}
 .monitor-box .mon-res{font-size:10px;color:var(--text3)}
-.monitor-box .mon-primary{position:absolute;top:3px;right:5px;font-size:9px;color:var(--accent);font-weight:600}
+.monitor-box .mon-primary{position:absolute;top:2px;right:4px;font-size:9px;color:var(--accent);font-weight:600}
 
 /* ─ Confirm dialog ─ */
 .confirm-body{padding:20px;text-align:center}
@@ -127,14 +125,19 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 
 /* ─ Color tags ─ */
 .color-tag{width:4px;border-radius:2px;align-self:stretch;flex-shrink:0}
+
+/* ─ Drag & drop overlay ─ */
+.drop-overlay{position:fixed;inset:0;background:rgba(91,154,255,.12);border:3px dashed var(--accent);z-index:300;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .15s}
+.drop-overlay.visible{opacity:1}
+.drop-overlay span{font-size:18px;color:var(--accent);font-weight:500;background:var(--surface);padding:16px 32px;border-radius:var(--radius);border:1px solid var(--accent)}
 </style>
 </head>
 <body>
 
 <header>
   <h1>RDP Launcher</h1>
-  <button class="btn-icon" onclick="refreshAll()" title="更新">↻</button>
-  <button class="btn-ghost" onclick="openSettings()">⚙ 設定</button>
+  <button class="btn-icon" onclick="refreshAll()" title="更新">&#x21bb;</button>
+  <button class="btn-ghost" onclick="openSettings()">&#x2699; 設定</button>
 </header>
 
 <main id="main"></main>
@@ -144,7 +147,7 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 <div class="modal">
   <div class="modal-header">
     <h2 id="settingsTitle">設定</h2>
-    <button class="btn-icon" onclick="closeSettings()">✕</button>
+    <button class="btn-icon" onclick="closeSettings()">&#x2715;</button>
   </div>
   <div class="tabs" id="settingsTabs"></div>
   <div class="modal-body" id="settingsBody"></div>
@@ -163,19 +166,26 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<!-- Drop overlay -->
+<div class="drop-overlay" id="dropOverlay"><span>.rdp ファイルをドロップしてホストを追加</span></div>
+
 <script>
 // ─── Tauri API ──────────────────────────────────────────────────────
 const invoke = window.__TAURI__?.core?.invoke ?? (async (cmd, args) => {
   console.warn(`[mock] invoke(${cmd})`, args);
-  // Dev fallback with dummy data
   if (cmd === 'get_state') return {
     config: { monitors: {}, profiles: {}, hosts: [] },
     monitors: [
-      { mstsc_id: 0, left: -1920, top: 0, width: 1920, height: 1080, is_primary: false },
-      { mstsc_id: 1, left: 0, top: 0, width: 2560, height: 1440, is_primary: true },
-      { mstsc_id: 2, left: 2560, top: 0, width: 1920, height: 1080, is_primary: false },
+      { mstsc_id: 0, left: -1920, top: 0, width: 1920, height: 1080, is_primary: false, device_name: 'HP VH240a' },
+      { mstsc_id: 1, left: 0, top: -360, width: 2560, height: 1440, is_primary: true, device_name: 'Dell U2723QE' },
+      { mstsc_id: 2, left: 2560, top: 0, width: 1920, height: 1080, is_primary: false, device_name: 'ASUS VG248' },
     ],
     active_sessions: [],
+  };
+  if (cmd === 'auto_detect_monitors') return {
+    'mon-0': { name: 'HP VH240a 1920x1080', left: -1920, top: 0, width: 1920, height: 1080 },
+    'mon-1': { name: 'Dell U2723QE 2560x1440', left: 0, top: -360, width: 2560, height: 1440 },
+    'mon-2': { name: 'ASUS VG248 1920x1080', left: 2560, top: 0, width: 1920, height: 1080 },
   };
   return null;
 });
@@ -185,12 +195,13 @@ let S = {
   config: { monitors: {}, profiles: {}, hosts: [] },
   liveMonitors: [],
   activeSessions: [],
-  settingsTab: 'monitors',
+  settingsTab: 'profiles',
 };
 
 // ─── Init ───────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await refreshAll();
+  setupDragDrop();
 });
 
 async function refreshAll() {
@@ -199,6 +210,15 @@ async function refreshAll() {
     S.config = state.config;
     S.liveMonitors = state.monitors;
     S.activeSessions = state.active_sessions;
+
+    // Auto-detect monitors on first run
+    if (Object.keys(S.config.monitors).length === 0 && S.liveMonitors.length > 0) {
+      try {
+        const defs = await invoke('auto_detect_monitors');
+        S.config.monitors = defs;
+        toast('モニターを自動検出しました');
+      } catch (e) { console.warn('Auto-detect failed:', e); }
+    }
   } catch (e) {
     console.error(e);
   }
@@ -214,28 +234,57 @@ function toast(msg, type = 'success') {
   el._t = setTimeout(() => el.className = 'toast', 2500);
 }
 
+// ─── 2D Monitor Layout ──────────────────────────────────────────────
+function renderLayout2D(monitors, opts = {}) {
+  // monitors: array of { left, top, width, height, ... }
+  // opts: { maxW, maxH, labelFn, classFn }
+  if (!monitors || monitors.length === 0) return '';
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  monitors.forEach(m => {
+    minX = Math.min(minX, m.left);
+    minY = Math.min(minY, m.top);
+    maxX = Math.max(maxX, m.left + m.width);
+    maxY = Math.max(maxY, m.top + m.height);
+  });
+
+  const totalW = maxX - minX || 1;
+  const totalH = maxY - minY || 1;
+  const cW = opts.maxW || 400;
+  const cH = opts.maxH || 180;
+  const scale = Math.min(cW / totalW, cH / totalH) * 0.9;
+  const sW = totalW * scale;
+  const sH = totalH * scale;
+
+  const boxes = monitors.map((m, i) => {
+    const x = (m.left - minX) * scale;
+    const y = (m.top - minY) * scale;
+    const w = m.width * scale;
+    const h = m.height * scale;
+    const label = opts.labelFn ? opts.labelFn(m, i) : (m.device_name || m.name || `ID ${m.mstsc_id ?? i}`);
+    const res = `${m.width}\u00d7${m.height}`;
+    const cls = opts.classFn ? opts.classFn(m, i) : 'monitor-box';
+    const primary = m._isPrimary || m.is_primary;
+    return `<div class="${cls}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px" data-idx="${i}">
+      <div class="mon-label">${esc(label)}</div>
+      <div class="mon-res">${res}</div>
+      ${primary ? '<div class="mon-primary">\u2605</div>' : ''}
+    </div>`;
+  }).join('');
+
+  return `<div style="position:relative;width:${sW}px;height:${sH}px;margin:0 auto">${boxes}</div>`;
+}
+
 // ─── Main view ──────────────────────────────────────────────────────
 function renderMain() {
   const el = document.getElementById('main');
   const hosts = S.config.hosts || [];
 
-  if (hosts.length === 0 && Object.keys(S.config.monitors).length === 0) {
-    el.innerHTML = `
-      <div class="empty">
-        <h2>RDP Launcher へようこそ</h2>
-        <p>まずモニターを検出して、接続先を追加しましょう。</p>
-        <button class="btn-primary" onclick="openSettings('monitors')" style="padding:10px 28px;font-size:14px">
-          モニターを検出して始める
-        </button>
-      </div>`;
-    return;
-  }
-
   if (hosts.length === 0) {
     el.innerHTML = `
       <div class="empty">
         <h2>接続先が未登録です</h2>
-        <p>RDPファイルを指定してホストを追加してください。</p>
+        <p>RDPファイルを指定してホストを追加してください。<br>.rdp ファイルをウィンドウにドロップしても追加できます。</p>
         <button class="btn-primary" onclick="addHostDialog()" style="padding:10px 28px;font-size:14px">
           + ホストを追加
         </button>
@@ -253,7 +302,6 @@ function renderMain() {
       h.name.toLowerCase().includes(s.hostname.toLowerCase())
     );
     const isActive = !!sess;
-    const profile = S.config.profiles?.[h.default_profile];
     const colorStyle = h.color ? `background:${h.color}` : `background:var(--accent)`;
 
     return `
@@ -266,8 +314,8 @@ function renderMain() {
           <div class="card-host">${esc(rdpHost)}</div>
         </div>
         <div class="card-actions">
-          <button class="btn-icon" onclick="editHostDialog('${esc(h.id)}')" title="編集">✎</button>
-          <button class="btn-icon" onclick="deleteHost('${esc(h.id)}','${esc(h.name)}')" title="削除">🗑</button>
+          <button class="btn-icon" onclick="editHostDialog('${esc(h.id)}')" title="編集">&#x270e;</button>
+          <button class="btn-icon" onclick="deleteHost('${esc(h.id)}','${esc(h.name)}')" title="削除">&#x1f5d1;</button>
         </div>
       </div>
       ${renderMonitorPreview(h.default_profile)}
@@ -279,7 +327,7 @@ function renderMain() {
       </div>
       <button class="btn-connect ${isActive ? 'connected' : ''}"
               onclick="doConnect('${esc(h.id)}')">
-        ${isActive ? '● 接続中 — 再接続' : '接続'}
+        ${isActive ? '\u25cf 接続中 \u2014 再接続' : '接続'}
       </button>
     </div>`;
   }).join('');
@@ -290,7 +338,6 @@ function renderMain() {
       <div class="add-card" onclick="addHostDialog()">+ ホストを追加</div>
     </div>`;
 
-  // Set default profile selection
   hosts.forEach(h => {
     const sel = document.getElementById(`profile-${h.id}`);
     if (sel) sel.value = h.default_profile;
@@ -299,28 +346,29 @@ function renderMain() {
 
 function renderMonitorPreview(profileId) {
   const profile = S.config.profiles?.[profileId];
-  if (!profile || S.liveMonitors.length === 0) return '';
+  if (!profile) return '';
 
   const allMons = Object.entries(S.config.monitors || {});
   if (allMons.length === 0) return '';
 
-  // Sort by left coordinate
-  const sorted = allMons.sort((a, b) => a[1].left - b[1].left);
-  const maxW = Math.max(...sorted.map(([, m]) => m.width));
+  const mons = allMons.map(([key, m]) => ({
+    ...m,
+    _key: key,
+    _isPrimary: key === profile.primary,
+  }));
 
-  const boxes = sorted.map(([key, m]) => {
-    const isSelected = profile.monitor_ids.includes(key);
-    const isPrimary = key === profile.primary;
-    const w = Math.max(30, Math.round(m.width / maxW * 60));
-    const h = Math.max(18, Math.round(m.height / maxW * 60));
-    return `<div class="monitor-mini ${isSelected ? 'selected' : ''} ${isPrimary ? 'primary' : ''}"
-                 style="width:${w}px;height:${h}px"
-                 title="${m.name} (${m.width}x${m.height})${isPrimary ? ' [PRIMARY]' : ''}">
-              ${isPrimary ? '★' : ''}
-            </div>`;
-  }).join('');
-
-  return `<div class="monitor-preview">${boxes}</div>`;
+  return `<div class="monitor-preview">${renderLayout2D(mons, {
+    maxW: 240,
+    maxH: 80,
+    labelFn: (m) => {
+      const sel = profile.monitor_ids.includes(m._key);
+      return sel ? (m._isPrimary ? '\u2605' : '') : '';
+    },
+    classFn: (m) => {
+      const sel = profile.monitor_ids.includes(m._key);
+      return 'monitor-box' + (sel ? ' selected' : '');
+    },
+  })}</div>`;
 }
 
 // ─── Connect flow ───────────────────────────────────────────────────
@@ -328,11 +376,9 @@ async function doConnect(hostId) {
   const sel = document.getElementById(`profile-${hostId}`);
   const host = S.config.hosts.find(h => h.id === hostId);
   const selectedProfile = sel?.value;
-  // Only send override if user explicitly changed from default
   const profileId = (selectedProfile && selectedProfile !== host?.default_profile) ? selectedProfile : undefined;
 
   try {
-    // Preflight check
     const result = await invoke('preflight_connect', {
       hostId,
       profileId: profileId || null,
@@ -340,7 +386,7 @@ async function doConnect(hostId) {
 
     if (result.needs_confirm) {
       showConfirm(
-        '⚠',
+        '\u26a0',
         result.message,
         '再接続する',
         async () => {
@@ -376,7 +422,7 @@ function closeConfirm() { document.getElementById('confirmOverlay').classList.re
 
 // ─── Settings ───────────────────────────────────────────────────────
 function openSettings(tab) {
-  S.settingsTab = tab || 'monitors';
+  S.settingsTab = tab || 'profiles';
   renderSettings();
   document.getElementById('settingsOverlay').classList.add('open');
 }
@@ -386,13 +432,14 @@ function closeSettings() {
 }
 
 function renderSettings() {
-  const tabs = ['monitors', 'profiles'];
-  const labels = { monitors: 'モニター', profiles: 'プロファイル' };
+  const tabs = ['profiles', 'monitors', 'advanced'];
+  const labels = { monitors: 'モニター', profiles: 'プロファイル', advanced: '高度なオプション' };
   document.getElementById('settingsTabs').innerHTML = tabs.map(t =>
     `<div class="tab ${S.settingsTab === t ? 'active' : ''}" onclick="S.settingsTab='${t}';renderSettings()">${labels[t]}</div>`
   ).join('');
 
   if (S.settingsTab === 'monitors') renderMonitorsTab();
+  else if (S.settingsTab === 'advanced') renderAdvancedTab();
   else renderProfilesTab();
 }
 
@@ -404,9 +451,14 @@ async function renderMonitorsTab() {
 
   let liveHTML = '';
   if (S.liveMonitors.length > 0) {
+    const liveLayout = renderLayout2D(S.liveMonitors, {
+      maxW: 500,
+      maxH: 160,
+      labelFn: (m) => m.device_name || `ID ${m.mstsc_id}`,
+    });
     liveHTML = `<div style="margin-bottom:16px">
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px">現在検出中のモニター:</div>
-      <div class="monitor-layout">${renderMonitorBoxes(S.liveMonitors)}</div>
+      <div class="monitor-layout">${liveLayout}</div>
     </div>`;
   }
 
@@ -417,10 +469,10 @@ async function renderMonitorsTab() {
         <div style="flex:1">
           <div style="font-weight:500">${esc(m.name)}</div>
           <div style="font-size:11px;color:var(--text3);font-family:var(--mono)">
-            ${esc(key)} · (${m.left}, ${m.top}) ${m.width}×${m.height}
+            ${esc(key)} \u00b7 (${m.left}, ${m.top}) ${m.width}\u00d7${m.height}
           </div>
         </div>
-        <button class="btn-icon" onclick="editMonitorDef('${esc(key)}')" title="編集">✎</button>
+        <button class="btn-icon" onclick="editMonitorDef('${esc(key)}')" title="編集">&#x270e;</button>
       </div>
     `).join('');
   } else {
@@ -434,21 +486,7 @@ async function renderMonitorsTab() {
     ${defsHTML}`;
 
   document.getElementById('settingsFooter').innerHTML = `
-    <button class="btn-primary" onclick="doAutoDetect()">🔍 自動検出</button>`;
-}
-
-function renderMonitorBoxes(monitors) {
-  const sorted = [...monitors].sort((a, b) => a.left - b.left);
-  const maxW = Math.max(...sorted.map(m => m.width));
-  return sorted.map(m => {
-    const w = Math.max(50, Math.round(m.width / maxW * 120));
-    const h = Math.max(35, Math.round(m.height / maxW * 120));
-    return `<div class="monitor-box" style="width:${w}px;height:${h}px">
-      <div class="mon-label">ID ${m.mstsc_id}</div>
-      <div class="mon-res">${m.width}×${m.height}</div>
-      ${m.is_primary ? '<div class="mon-primary">P</div>' : ''}
-    </div>`;
-  }).join('');
+    <button class="btn-primary" onclick="doAutoDetect()">&#x1f50d; 自動検出</button>`;
 }
 
 async function doAutoDetect() {
@@ -496,6 +534,136 @@ async function saveMonitorDef(key) {
   } catch (e) { toast(String(e), 'error'); }
 }
 
+// ── Advanced tab ──
+function renderAdvancedTab() {
+  const body = document.getElementById('settingsBody');
+  body.innerHTML = `
+    <div style="margin-bottom:16px">
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">mstsc /l キャプチャテスト</div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
+        MessageBoxW フックを使って mstsc /l の出力をサイレントキャプチャします。<br>
+        接続時に使用されるモニターIDの正確性を確認できます。
+      </p>
+      <button class="btn-primary" id="advTestBtn" onclick="runMstscCaptureTest()">テスト実行</button>
+    </div>
+    <div id="advTestResult"></div>
+
+    <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">EnumDisplayMonitors 比較</div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
+        現在の EnumDisplayMonitors の結果と比較します。
+      </p>
+      <div id="advEnumResult"></div>
+    </div>`;
+
+  document.getElementById('settingsFooter').innerHTML = '';
+
+  // Show current EnumDisplayMonitors result
+  const enumEl = document.getElementById('advEnumResult');
+  if (S.liveMonitors.length > 0) {
+    enumEl.innerHTML = `
+      <table style="width:100%;font-size:12px;font-family:var(--mono);border-collapse:collapse">
+        <tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">
+          <th style="padding:4px 8px">ID</th>
+          <th style="padding:4px 8px">デバイス名</th>
+          <th style="padding:4px 8px">位置</th>
+          <th style="padding:4px 8px">解像度</th>
+          <th style="padding:4px 8px">Primary</th>
+        </tr>
+        ${S.liveMonitors.map(m => `
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:4px 8px">${m.mstsc_id}</td>
+            <td style="padding:4px 8px">${esc(m.device_name || '-')}</td>
+            <td style="padding:4px 8px">(${m.left}, ${m.top})</td>
+            <td style="padding:4px 8px">${m.width}\u00d7${m.height}</td>
+            <td style="padding:4px 8px">${m.is_primary ? '\u2605' : ''}</td>
+          </tr>
+        `).join('')}
+      </table>`;
+  } else {
+    enumEl.innerHTML = '<p style="color:var(--text3);font-size:12px">モニターが検出されていません</p>';
+  }
+}
+
+async function runMstscCaptureTest() {
+  const btn = document.getElementById('advTestBtn');
+  const resultEl = document.getElementById('advTestResult');
+  btn.disabled = true;
+  btn.textContent = '実行中...';
+  resultEl.innerHTML = '<p style="color:var(--text2);font-size:12px">mstsc /l をキャプチャ中... (最大5秒)</p>';
+
+  try {
+    const result = await invoke('test_mstsc_capture');
+    const rawText = result.raw_text || '';
+    const monitors = result.monitors || [];
+
+    let idMatch = true;
+    for (const mm of monitors) {
+      const enumMon = S.liveMonitors.find(m =>
+        m.left === mm.left && m.top === mm.top && m.width === mm.width && m.height === mm.height
+      );
+      if (enumMon && enumMon.mstsc_id !== mm.mstsc_id) {
+        idMatch = false;
+        break;
+      }
+    }
+
+    const logLines = (result.logs || []).map(l => esc(l)).join('\n');
+
+    let monitorTable = '';
+    if (monitors.length > 0) {
+      monitorTable = `
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;color:var(--text2);margin-bottom:4px">パース結果 (${monitors.length}台):</div>
+          <table style="width:100%;font-size:12px;font-family:var(--mono);border-collapse:collapse">
+            <tr style="color:var(--text2);text-align:left;border-bottom:1px solid var(--border)">
+              <th style="padding:4px 8px">mstsc ID</th>
+              <th style="padding:4px 8px">位置</th>
+              <th style="padding:4px 8px">解像度</th>
+              <th style="padding:4px 8px">Primary</th>
+              <th style="padding:4px 8px">Enum ID</th>
+              <th style="padding:4px 8px">一致</th>
+            </tr>
+            ${monitors.map(mm => {
+              const enumMon = S.liveMonitors.find(m =>
+                m.left === mm.left && m.top === mm.top && m.width === mm.width && m.height === mm.height
+              );
+              const enumId = enumMon ? enumMon.mstsc_id : '?';
+              const match = enumMon ? (enumMon.mstsc_id === mm.mstsc_id) : null;
+              return `<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:4px 8px">${mm.mstsc_id}</td>
+                <td style="padding:4px 8px">(${mm.left}, ${mm.top})</td>
+                <td style="padding:4px 8px">${mm.width}\u00d7${mm.height}</td>
+                <td style="padding:4px 8px">${mm.is_primary ? '\u2605' : ''}</td>
+                <td style="padding:4px 8px">${enumId}</td>
+                <td style="padding:4px 8px;color:${match === true ? 'var(--green)' : match === false ? 'var(--red)' : 'var(--text3)'}">${match === true ? '\u2713' : match === false ? '\u2717' : '-'}</td>
+              </tr>`;
+            }).join('')}
+          </table>
+        </div>
+        <div style="font-size:12px;padding:8px 12px;border-radius:var(--radius-sm);margin-bottom:12px;background:${idMatch ? 'rgba(61,214,140,.1)' : 'rgba(232,84,84,.1)'};color:${idMatch ? 'var(--green)' : 'var(--red)'}">
+          ${idMatch ? '\u2713 EnumDisplayMonitors と mstsc のIDは一致しています' : '\u2717 IDが一致しません \u2014 フックによるID補正が必要です'}
+        </div>`;
+    }
+
+    resultEl.innerHTML = `
+      <div style="margin-bottom:12px">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">デバッグログ:</div>
+        <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:250px;overflow-y:auto">${logLines}</pre>
+      </div>
+      ${rawText ? `<div style="margin-bottom:12px">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">キャプチャした生テキスト:</div>
+        <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:200px;overflow-y:auto">${esc(rawText)}</pre>
+      </div>` : '<div style="color:var(--amber);font-size:12px;margin-bottom:12px;padding:8px 12px;background:rgba(240,160,64,.1);border-radius:var(--radius-sm)">テキストがキャプチャされませんでした</div>'}
+      ${monitorTable}`;
+  } catch (e) {
+    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">エラー: ${esc(String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'テスト実行';
+  }
+}
+
 // ── Profiles tab ──
 function renderProfilesTab() {
   const body = document.getElementById('settingsBody');
@@ -508,16 +676,16 @@ function renderProfilesTab() {
         <div style="flex:1">
           <div style="font-weight:500">${esc(p.name)}</div>
           <div style="font-size:11px;color:var(--text3)">
-            Monitors: ${p.monitor_ids.join(', ')} · Primary: ${esc(p.primary)}
+            Monitors: ${p.monitor_ids.join(', ')} \u00b7 Primary: ${esc(p.primary)}
           </div>
         </div>
-        <button class="btn-icon" onclick="editProfile('${esc(key)}')" title="編集">✎</button>
-        <button class="btn-icon" onclick="doDeleteProfile('${esc(key)}')" title="削除">🗑</button>
+        <button class="btn-icon" onclick="editProfile('${esc(key)}')" title="編集">&#x270e;</button>
+        <button class="btn-icon" onclick="doDeleteProfile('${esc(key)}')" title="削除">&#x1f5d1;</button>
       </div>
     `).join('');
   } else {
     html = `<p style="color:var(--text3);text-align:center;padding:20px">
-      プロファイルがありません。まずモニターを検出してからプロファイルを作成してください。</p>`;
+      プロファイルがありません。モニターを検出してからプロファイルを作成してください。</p>`;
   }
 
   body.innerHTML = html;
@@ -546,52 +714,81 @@ function editProfile(key) {
     </div>
     ${isNew ? `<div class="field"><label>キー (ID)</label><input id="ep-key" value="${esc(editKey)}" placeholder="英数字のID"></div>` : ''}
     <div style="font-size:12px;color:var(--text2);margin:12px 0 6px">使用するモニターを選択 (クリックで選択/解除、ダブルクリックでPrimary):</div>
-    <div class="monitor-layout" id="ep-layout"></div>
+    <div class="monitor-layout" id="ep-layout" style="min-height:160px"></div>
     <div style="font-size:11px;color:var(--text3);margin-top:4px">
       選択中: <span id="ep-selected">${profile.monitor_ids.join(', ') || 'なし'}</span>
       &nbsp;|&nbsp; Primary: <span id="ep-primary">${profile.primary || 'なし'}</span>
     </div>`;
 
-  // Render interactive monitor boxes
+  // Build interactive 2D layout
   const layout = document.getElementById('ep-layout');
   const state = { ids: [...profile.monitor_ids], primary: profile.primary };
 
-  monEntries.forEach(([mkey, m]) => {
-    const maxW = Math.max(...monEntries.map(([, v]) => v.width));
-    const w = Math.max(60, Math.round(m.width / maxW * 140));
-    const h = Math.max(40, Math.round(m.height / maxW * 140));
-    const box = document.createElement('div');
-    box.className = 'monitor-box' + (state.ids.includes(mkey) ? ' selected' : '');
-    box.style.cssText = `width:${w}px;height:${h}px`;
-    box.innerHTML = `
-      <div class="mon-label">${esc(m.name)}</div>
-      <div class="mon-res">${m.width}×${m.height}</div>
-      ${mkey === state.primary ? '<div class="mon-primary">PRIMARY</div>' : ''}`;
-    box.onclick = () => {
-      const idx = state.ids.indexOf(mkey);
-      if (idx >= 0) { state.ids.splice(idx, 1); if (state.primary === mkey) state.primary = state.ids[0] || ''; }
-      else state.ids.push(mkey);
-      updateProfileEditor(monEntries, state, layout);
-    };
-    box.ondblclick = () => {
-      if (!state.ids.includes(mkey)) state.ids.push(mkey);
-      state.primary = mkey;
-      updateProfileEditor(monEntries, state, layout);
-    };
-    layout.appendChild(box);
-  });
+  buildInteractiveLayout(layout, monEntries, state);
 
   document.getElementById('settingsFooter').innerHTML = `
     <button class="btn-ghost" onclick="renderSettings()">戻る</button>
     <button class="btn-primary" onclick="saveProfile('${esc(isNew ? '' : key)}')">保存</button>`;
 
-  // Store state reference for save
   layout._state = state;
+  layout._monEntries = monEntries;
 }
 
-function updateProfileEditor(monEntries, state, layout) {
-  layout.querySelectorAll('.monitor-box').forEach((box, i) => {
-    const mkey = monEntries[i][0];
+function buildInteractiveLayout(container, monEntries, state) {
+  // Calculate bounding box
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  monEntries.forEach(([, m]) => {
+    minX = Math.min(minX, m.left);
+    minY = Math.min(minY, m.top);
+    maxX = Math.max(maxX, m.left + m.width);
+    maxY = Math.max(maxY, m.top + m.height);
+  });
+
+  const totalW = maxX - minX || 1;
+  const totalH = maxY - minY || 1;
+  const cW = 500;
+  const cH = 180;
+  const scale = Math.min(cW / totalW, cH / totalH) * 0.9;
+  const sW = totalW * scale;
+  const sH = totalH * scale;
+
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = `position:relative;width:${sW}px;height:${sH}px;margin:0 auto`;
+  container.innerHTML = '';
+  container.appendChild(wrapper);
+
+  monEntries.forEach(([mkey, m]) => {
+    const x = (m.left - minX) * scale;
+    const y = (m.top - minY) * scale;
+    const w = m.width * scale;
+    const h = m.height * scale;
+
+    const box = document.createElement('div');
+    box.className = 'monitor-box' + (state.ids.includes(mkey) ? ' selected' : '');
+    box.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
+    box.dataset.key = mkey;
+    box.innerHTML = `
+      <div class="mon-label">${esc(m.name)}</div>
+      <div class="mon-res">${m.width}\u00d7${m.height}</div>
+      ${mkey === state.primary ? '<div class="mon-primary">PRIMARY</div>' : ''}`;
+    box.onclick = () => {
+      const idx = state.ids.indexOf(mkey);
+      if (idx >= 0) { state.ids.splice(idx, 1); if (state.primary === mkey) state.primary = state.ids[0] || ''; }
+      else state.ids.push(mkey);
+      updateProfileBoxes(wrapper, monEntries, state);
+    };
+    box.ondblclick = () => {
+      if (!state.ids.includes(mkey)) state.ids.push(mkey);
+      state.primary = mkey;
+      updateProfileBoxes(wrapper, monEntries, state);
+    };
+    wrapper.appendChild(box);
+  });
+}
+
+function updateProfileBoxes(wrapper, monEntries, state) {
+  wrapper.querySelectorAll('.monitor-box').forEach((box) => {
+    const mkey = box.dataset.key;
     box.className = 'monitor-box' + (state.ids.includes(mkey) ? ' selected' : '');
     const primaryEl = box.querySelector('.mon-primary');
     if (mkey === state.primary) {
@@ -627,7 +824,7 @@ async function saveProfile(existingKey) {
 }
 
 async function doDeleteProfile(key) {
-  showConfirm('🗑', `プロファイル "${S.config.profiles[key]?.name}" を削除しますか？`, '削除', async () => {
+  showConfirm('\u1f5d1', `プロファイル "${S.config.profiles[key]?.name}" を削除しますか？`, '削除', async () => {
     try {
       await invoke('delete_profile', { id: key });
       delete S.config.profiles[key];
@@ -638,12 +835,6 @@ async function doDeleteProfile(key) {
 
 // ─── Host management ────────────────────────────────────────────────
 async function addHostDialog() {
-  const profiles = Object.entries(S.config.profiles || {});
-  if (profiles.length === 0) {
-    toast('先にプロファイルを作成してください', 'error');
-    openSettings('profiles');
-    return;
-  }
   showHostEditor(null);
 }
 
@@ -730,13 +921,88 @@ async function saveHostFromEditor(hostId) {
 }
 
 async function deleteHost(id, name) {
-  showConfirm('🗑', `"${name}" を削除しますか？`, '削除', async () => {
+  showConfirm('\u1f5d1', `"${name}" を削除しますか？`, '削除', async () => {
     try {
       await invoke('delete_host', { id });
       S.config.hosts = S.config.hosts.filter(h => h.id !== id);
       renderMain();
     } catch (e) { toast(String(e), 'error'); }
   });
+}
+
+// ─── Drag & drop .rdp files ─────────────────────────────────────────
+function setupDragDrop() {
+  const dropEl = document.getElementById('dropOverlay');
+
+  // Try Tauri 2 webviewWindow.onDragDropEvent (preferred)
+  const getCurrent = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow;
+  if (getCurrent) {
+    const win = getCurrent();
+    win.onDragDropEvent((event) => {
+      if (event.payload.type === 'enter' || event.payload.type === 'over') {
+        dropEl.classList.add('visible');
+      } else if (event.payload.type === 'leave') {
+        dropEl.classList.remove('visible');
+      } else if (event.payload.type === 'drop') {
+        dropEl.classList.remove('visible');
+        const paths = event.payload.paths || [];
+        for (const p of paths) {
+          if (p.toLowerCase().endsWith('.rdp')) {
+            handleRdpDrop(p);
+          }
+        }
+      }
+    });
+  } else {
+    // Fallback: try event.listen
+    const listen = window.__TAURI__?.event?.listen;
+    if (listen) {
+      listen('tauri://drag-enter', () => dropEl.classList.add('visible'));
+      listen('tauri://drag-leave', () => dropEl.classList.remove('visible'));
+      listen('tauri://drag-drop', async (event) => {
+        dropEl.classList.remove('visible');
+        const paths = event?.payload?.paths || [];
+        for (const p of paths) {
+          if (p.toLowerCase().endsWith('.rdp')) {
+            await handleRdpDrop(p);
+          }
+        }
+      });
+    }
+  }
+
+  // Fallback HTML5 drag/drop (for dev mode without Tauri)
+  if (!window.__TAURI__) {
+    document.body.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropEl.classList.add('visible');
+    });
+    document.body.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget === null) dropEl.classList.remove('visible');
+    });
+    document.body.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropEl.classList.remove('visible');
+    });
+  }
+}
+
+async function handleRdpDrop(filePath) {
+  try {
+    const info = await invoke('import_rdp', { path: filePath });
+    if (info) {
+      // Open host editor pre-filled
+      showHostEditor({
+        id: `host-${Date.now()}`,
+        name: info.host || '',
+        rdp_file: info.path || filePath,
+        default_profile: Object.keys(S.config.profiles || {})[0] || '',
+        color: '#5b9aff',
+      });
+    }
+  } catch (e) {
+    toast(`RDP読み込みエラー: ${e}`, 'error');
+  }
 }
 
 // ─── Keyboard shortcuts ─────────────────────────────────────────────
@@ -748,7 +1014,6 @@ document.addEventListener('keydown', (e) => {
       closeSettings();
     }
   }
-  // Ctrl+R or F5 to refresh
   if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
     e.preventDefault();
     refreshAll();

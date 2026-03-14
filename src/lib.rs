@@ -133,7 +133,7 @@ fn preflight_connect(
         .get(profile_key)
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
-    let live = monitor::get_current_monitors()?;
+    let live = monitor::get_monitors_for_connect()?;
     let _selected = monitor::resolve_profile(&config, profile, &live)?;
 
     let rdp_host = rdp::read_rdp_host(&host.rdp_file).unwrap_or_default();
@@ -174,14 +174,19 @@ fn connect(
         .get(profile_key)
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
-    let live = monitor::get_current_monitors()?;
+    let live = monitor::get_monitors_for_connect()?;
     let selected = monitor::resolve_profile(&config, profile, &live)?;
 
     let launch_rdp = rdp::prepare_rdp_for_launch(&host.rdp_file, &selected)?;
 
-    std::process::Command::new("mstsc.exe")
-        .arg(&launch_rdp)
-        .spawn()
+    let mut cmd = std::process::Command::new("mstsc.exe");
+    cmd.arg(&launch_rdp);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd.spawn()
         .map_err(|e| format!("Failed to launch mstsc: {e}"))?;
 
     Ok(format!("接続開始: {} (monitors: {})", host.name, selected))
@@ -189,18 +194,24 @@ fn connect(
 
 #[tauri::command]
 fn browse_rdp_file() -> Result<Option<rdp::RdpInfo>, String> {
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            r#"
-            Add-Type -AssemblyName System.Windows.Forms
-            $d = New-Object System.Windows.Forms.OpenFileDialog
-            $d.Filter = 'RDP Files (*.rdp)|*.rdp|All Files (*.*)|*.*'
-            $d.Title = 'RDPファイルを選択'
-            if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }
-            "#,
-        ])
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-Command",
+        r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $d = New-Object System.Windows.Forms.OpenFileDialog
+        $d.Filter = 'RDP Files (*.rdp)|*.rdp|All Files (*.*)|*.*'
+        $d.Title = 'RDPファイルを選択'
+        if ($d.ShowDialog() -eq 'OK') { Write-Output $d.FileName }
+        "#,
+    ]);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd
         .output()
         .map_err(|e| format!("File dialog error: {e}"))?;
 
@@ -209,6 +220,16 @@ fn browse_rdp_file() -> Result<Option<rdp::RdpInfo>, String> {
         return Ok(None);
     }
     rdp::read_rdp_info(&path).map(Some)
+}
+
+#[tauri::command]
+fn import_rdp(path: String) -> Result<rdp::RdpInfo, String> {
+    rdp::read_rdp_info(&path)
+}
+
+#[tauri::command]
+fn test_mstsc_capture() -> Result<monitor::CaptureResult, String> {
+    monitor::test_mstsc_capture()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -234,6 +255,8 @@ pub fn run() {
             preflight_connect,
             connect,
             browse_rdp_file,
+            import_rdp,
+            test_mstsc_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
