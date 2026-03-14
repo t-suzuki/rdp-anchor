@@ -68,20 +68,499 @@ pub fn test_mstsc_capture() -> Result<CaptureResult, String> {
 
     #[cfg(target_os = "windows")]
     {
-        capture_mstsc_silent_with_logs()
+        capture_debug_target("mstsc.exe /l")
     }
+}
+
+/// Test hook mechanism: spawn test_msgbox.exe --indirect (child process scenario).
+pub fn test_hook_basic() -> Result<CaptureResult, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Windows only".into())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // --indirect: test_msgbox spawns itself without the flag as a child process.
+        // This tests that our debug loop hooks child processes too.
+        let exe = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("debug")
+            .join("test_msgbox.exe");
+        capture_debug_target(&format!("{} --indirect", exe.display()))
+    }
+}
+
+/// Diagnose: set breakpoint on CreateWindowExW, log every call with params + stack trace.
+pub fn diagnose_mstsc() -> Result<CaptureResult, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Windows only".into())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        diagnose_mstsc_inner()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn diagnose_mstsc_inner() -> Result<CaptureResult, String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::*;
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::Win32::System::Memory::*;
+    use windows::Win32::System::Threading::*;
+    use windows::Win32::System::LibraryLoader::*;
+    use windows::core::*;
+
+    // Raw FFI for Get/SetThreadContext (not in windows crate with current features)
+    #[repr(C, align(16))]
+    struct ContextAmd64([u8; 1232]);
+
+    extern "system" {
+        fn GetThreadContext(hThread: HANDLE, lpContext: *mut ContextAmd64) -> BOOL;
+        fn SetThreadContext(hThread: HANDLE, lpContext: *const ContextAmd64) -> BOOL;
+    }
+
+    // CONTEXT offsets for x86_64
+    const CTX_FLAGS: usize = 0x30;
+    const CTX_EFLAGS: usize = 0x44;
+    const CTX_RCX: usize = 0x80;
+    const CTX_RDX: usize = 0x88;
+    const CTX_RSP: usize = 0x98;
+    const CTX_R8: usize = 0xB8;
+    const CTX_RIP: usize = 0xF8;
+
+    fn ctx_u64(ctx: &ContextAmd64, off: usize) -> u64 {
+        u64::from_le_bytes(ctx.0[off..off + 8].try_into().unwrap())
+    }
+    fn ctx_u32(ctx: &ContextAmd64, off: usize) -> u32 {
+        u32::from_le_bytes(ctx.0[off..off + 4].try_into().unwrap())
+    }
+    fn ctx_set_u64(ctx: &mut ContextAmd64, off: usize, val: u64) {
+        ctx.0[off..off + 8].copy_from_slice(&val.to_le_bytes());
+    }
+    fn ctx_set_u32(ctx: &mut ContextAmd64, off: usize, val: u32) {
+        ctx.0[off..off + 4].copy_from_slice(&val.to_le_bytes());
+    }
+
+    let mut logs: Vec<String> = Vec::new();
+
+    // Resolve target function addresses
+    struct BpTarget {
+        name: &'static str,
+        addr: usize,
+        orig_byte: u8,
+        active: bool,
+        hit_count: u32,
+    }
+
+    let user32 = unsafe { LoadLibraryW(w!("user32.dll")).map_err(|e| format!("{e}"))? };
+    let resolve = |name: &'static str, lib: HMODULE, sym: &str| -> Option<BpTarget> {
+        let addr = unsafe {
+            GetProcAddress(lib, windows::core::PCSTR(format!("{sym}\0").as_ptr()))
+                .map(|f| f as usize)
+        };
+        addr.map(|a| {
+            BpTarget { name, addr: a, orig_byte: 0, active: false, hit_count: 0 }
+        })
+    };
+
+    let mut targets: Vec<BpTarget> = Vec::new();
+
+    // Functions to breakpoint on
+    let names: &[(&str, &str)] = &[
+        ("CreateWindowExW", "CreateWindowExW"),
+        ("DialogBoxIndirectParamW", "DialogBoxIndirectParamW"),
+        ("DialogBoxIndirectParamA", "DialogBoxIndirectParamA"),
+        ("DialogBoxParamW", "DialogBoxParamW"),
+    ];
+    for &(display, sym) in names {
+        if let Some(t) = resolve(display, user32, sym) {
+            logs.push(format!("{} @ 0x{:x}", t.name, t.addr));
+            targets.push(t);
+        }
+    }
+
+    // Spawn mstsc /l as debuggee
+    let mut cmd_line: Vec<u16> = OsStr::new("mstsc.exe /l")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    unsafe {
+        CreateProcessW(
+            None,
+            PWSTR(cmd_line.as_mut_ptr()),
+            None,
+            None,
+            false,
+            DEBUG_PROCESS | CREATE_NEW_CONSOLE,
+            None,
+            None,
+            &si,
+            &mut pi,
+        )
+    }
+    .map_err(|e| format!("CreateProcessW: {e}"))?;
+
+    let h_process = pi.hProcess;
+    let _guard = ProcessGuard {
+        h_process,
+        h_thread: pi.hThread,
+    };
+    logs.push(format!("mstsc PID={}", pi.dwProcessId));
+
+    // Breakpoint state
+    let mut single_step_tid: Option<u32> = None;
+    let mut single_step_bp_idx: Option<usize> = None;
+    let mut initial_bp = false;
+    let mut event_count = 0u32;
+    let mut dll_count = 0u32;
+
+    // Module tracking: (base, name)
+    let mut modules: Vec<(usize, String)> = Vec::new();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+
+    loop {
+        if std::time::Instant::now() > deadline {
+            logs.push("Timeout (12s)".into());
+            break;
+        }
+
+        let mut event: DEBUG_EVENT = unsafe { std::mem::zeroed() };
+        if unsafe { WaitForDebugEvent(&mut event, 200) }.is_err() {
+            continue;
+        }
+        event_count += 1;
+
+        let cs = match event.dwDebugEventCode {
+            CREATE_PROCESS_DEBUG_EVENT => {
+                let base = unsafe { event.u.CreateProcessInfo.lpBaseOfImage } as usize;
+                modules.push((base, "mstsc.exe".into()));
+                logs.push(format!("[{}] CREATE_PROCESS base=0x{:x}", event_count, base));
+                unsafe {
+                    let h = event.u.CreateProcessInfo.hFile;
+                    if !h.is_invalid() {
+                        let _ = CloseHandle(h);
+                    }
+                }
+                DBG_CONTINUE
+            }
+            LOAD_DLL_DEBUG_EVENT => {
+                dll_count += 1;
+                let base = unsafe { event.u.LoadDll.lpBaseOfDll } as usize;
+                // Read DLL name from debug info
+                let name = read_dll_name_from_event(h_process, unsafe { &event.u.LoadDll });
+                modules.push((base, if name.is_empty() { format!("dll_{}", dll_count) } else { name }));
+                unsafe {
+                    let h = event.u.LoadDll.hFile;
+                    if !h.is_invalid() {
+                        let _ = CloseHandle(h);
+                    }
+                }
+                DBG_CONTINUE
+            }
+            EXCEPTION_DEBUG_EVENT => {
+                let code = unsafe { event.u.Exception.ExceptionRecord.ExceptionCode };
+                let exc_addr =
+                    unsafe { event.u.Exception.ExceptionRecord.ExceptionAddress } as usize;
+
+                if code.0 == 0x80000003u32 as i32 {
+                    // STATUS_BREAKPOINT
+                    if !initial_bp {
+                        initial_bp = true;
+                        logs.push(format!(
+                            "[{}] Initial BP ({} DLLs)",
+                            event_count, dll_count
+                        ));
+                        // Set breakpoints on all targets
+                        for t in targets.iter_mut() {
+                            let mut orig = [0u8; 1];
+                            if read_remote(h_process, t.addr, &mut orig) {
+                                t.orig_byte = orig[0];
+                                let bp_byte = [0xCCu8; 1];
+                                let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+                                unsafe {
+                                    let _ = VirtualProtectEx(h_process, t.addr as *const _, 1, PAGE_EXECUTE_READWRITE, &mut old_prot);
+                                    let _ = WriteProcessMemory(h_process, t.addr as *mut _, bp_byte.as_ptr() as *const _, 1, None);
+                                    let _ = VirtualProtectEx(h_process, t.addr as *const _, 1, old_prot, &mut old_prot);
+                                }
+                                t.active = true;
+                                logs.push(format!("BP set on {}", t.name));
+                            }
+                        }
+                    } else if let Some(bp_idx) = targets.iter().position(|t| t.active && t.addr == exc_addr) {
+                        // One of our breakpoints hit!
+                        targets[bp_idx].hit_count += 1;
+                        let bp_name = targets[bp_idx].name;
+                        let bp_hit = targets[bp_idx].hit_count;
+
+                        // Get thread context for params + stack
+                        if let Ok(h_thread) = unsafe {
+                            OpenThread(
+                                THREAD_ACCESS_RIGHTS(0x001A), // GET_CONTEXT|SET_CONTEXT|SUSPEND_RESUME
+                                false,
+                                event.dwThreadId,
+                            )
+                        } {
+                            let mut ctx = ContextAmd64([0u8; 1232]);
+                            ctx_set_u32(&mut ctx, CTX_FLAGS, 0x10_0003); // CONTROL | INTEGER
+
+                            let got = unsafe { GetThreadContext(h_thread, &mut ctx) };
+                            if got.as_bool() {
+                                let rcx = ctx_u64(&ctx, CTX_RCX);
+                                let rdx = ctx_u64(&ctx, CTX_RDX);
+                                let r8 = ctx_u64(&ctx, CTX_R8);
+                                let rsp = ctx_u64(&ctx, CTX_RSP);
+
+                                // Return address from [RSP]
+                                let mut ret_buf = [0u8; 8];
+                                let _ = read_remote(h_process, rsp as usize, &mut ret_buf);
+                                let ret_addr = u64::from_le_bytes(ret_buf);
+                                let ret_mod = find_module(ret_addr as usize, &modules);
+
+                                if bp_name == "CreateWindowExW" {
+                                    // RCX=dwExStyle, RDX=lpClassName, R8=lpWindowName
+                                    let class_name = if rdx < 0x10000 {
+                                        format!("ATOM(0x{:x})", rdx)
+                                    } else {
+                                        read_remote_wstr(h_process, rdx as usize, 128)
+                                    };
+                                    let wnd_text = if r8 == 0 {
+                                        "<null>".into()
+                                    } else {
+                                        read_remote_wstr(h_process, r8 as usize, 256)
+                                    };
+                                    logs.push(format!(
+                                        "[{}] {} #{}: class=\"{}\" text=\"{}\" ret=0x{:x}({})",
+                                        event_count, bp_name, bp_hit, class_name, wnd_text, ret_addr, ret_mod
+                                    ));
+
+                                    // For calls with non-empty window text, dump raw stack
+                                    if !wnd_text.is_empty() && wnd_text != "<null>" {
+                                        logs.push(format!("  >>> Window with text: \"{}\"", wnd_text));
+                                        let mut stack_buf = [0u8; 160];
+                                        let _ = read_remote(h_process, rsp as usize, &mut stack_buf);
+                                        for i in 0..20 {
+                                            let addr = u64::from_le_bytes(stack_buf[i*8..(i+1)*8].try_into().unwrap());
+                                            let m = find_module(addr as usize, &modules);
+                                            if !m.is_empty() {
+                                                logs.push(format!("    RSP+0x{:02x}: 0x{:016x} {}", i*8, addr, m));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Dialog function hit! Log with full stack trace
+                                    // RCX=hInstance/hWndOwner, RDX=template/name, R8=dialog/parent, R9=proc
+                                    logs.push(format!(
+                                        "[{}] >>> {} #{}: RCX=0x{:x} RDX=0x{:x} R8=0x{:x} ret=0x{:x}({})",
+                                        event_count, bp_name, bp_hit, rcx, rdx, r8, ret_addr, ret_mod
+                                    ));
+                                    // Full stack dump for dialog calls
+                                    let mut stack_buf = [0u8; 256]; // 32 frames
+                                    let _ = read_remote(h_process, rsp as usize, &mut stack_buf);
+                                    for i in 0..32 {
+                                        let addr = u64::from_le_bytes(stack_buf[i*8..(i+1)*8].try_into().unwrap());
+                                        let m = find_module(addr as usize, &modules);
+                                        if !m.is_empty() {
+                                            logs.push(format!("    RSP+0x{:02x}: 0x{:016x} {}", i*8, addr, m));
+                                        }
+                                    }
+                                }
+
+                                // Restore original byte, set RIP back, enable single-step
+                                let bp_addr = targets[bp_idx].addr;
+                                let bp_orig = targets[bp_idx].orig_byte;
+                                let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+                                unsafe {
+                                    let _ = VirtualProtectEx(h_process, bp_addr as *const _, 1, PAGE_EXECUTE_READWRITE, &mut old_prot);
+                                    let _ = WriteProcessMemory(h_process, bp_addr as *mut _, &bp_orig as *const u8 as *const _, 1, None);
+                                    let _ = VirtualProtectEx(h_process, bp_addr as *const _, 1, old_prot, &mut old_prot);
+                                }
+                                ctx_set_u64(&mut ctx, CTX_RIP, bp_addr as u64);
+                                let eflags = ctx_u32(&ctx, CTX_EFLAGS) | 0x100; // Trap Flag
+                                ctx_set_u32(&mut ctx, CTX_EFLAGS, eflags);
+                                let _ = unsafe { SetThreadContext(h_thread, &ctx) };
+                                single_step_tid = Some(event.dwThreadId);
+                                single_step_bp_idx = Some(bp_idx);
+                            } else {
+                                logs.push(format!("  GetThreadContext failed for tid={}", event.dwThreadId));
+                            }
+                            unsafe {
+                                let _ = CloseHandle(h_thread);
+                            }
+                        }
+                    }
+                    DBG_CONTINUE
+                } else if code.0 == 0x80000004u32 as i32 {
+                    // STATUS_SINGLE_STEP
+                    if single_step_tid == Some(event.dwThreadId) {
+                        // Re-set breakpoint on the target that was single-stepped
+                        if let Some(idx) = single_step_bp_idx {
+                            let bp_addr = targets[idx].addr;
+                            let bp_byte = [0xCCu8; 1];
+                            let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+                            unsafe {
+                                let _ = VirtualProtectEx(h_process, bp_addr as *const _, 1, PAGE_EXECUTE_READWRITE, &mut old_prot);
+                                let _ = WriteProcessMemory(h_process, bp_addr as *mut _, bp_byte.as_ptr() as *const _, 1, None);
+                                let _ = VirtualProtectEx(h_process, bp_addr as *const _, 1, old_prot, &mut old_prot);
+                            }
+                        }
+                        single_step_tid = None;
+                        single_step_bp_idx = None;
+                        DBG_CONTINUE
+                    } else {
+                        DBG_EXCEPTION_NOT_HANDLED
+                    }
+                } else {
+                    DBG_EXCEPTION_NOT_HANDLED
+                }
+            }
+            EXIT_PROCESS_DEBUG_EVENT => {
+                let exit_code = unsafe { event.u.ExitProcess.dwExitCode };
+                logs.push(format!(
+                    "[{}] EXIT_PROCESS (code={})",
+                    event_count, exit_code
+                ));
+                unsafe {
+                    let _ = ContinueDebugEvent(
+                        event.dwProcessId,
+                        event.dwThreadId,
+                        DBG_CONTINUE,
+                    );
+                }
+                break;
+            }
+            _ => DBG_CONTINUE,
+        };
+
+        unsafe {
+            let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, cs);
+        }
+    }
+
+    logs.push(format!("\nTotal: {} events, {} DLLs", event_count, dll_count));
+    for t in &targets {
+        logs.push(format!("  {}: {} hits", t.name, t.hit_count));
+    }
+
+    // Log loaded modules sorted by base
+    modules.sort_by_key(|(base, _)| *base);
+    logs.push(format!("\nModules ({}):", modules.len()));
+    for (base, name) in &modules {
+        logs.push(format!("  0x{:016x} {}", base, name));
+    }
+
+    Ok(CaptureResult {
+        raw_text: String::new(),
+        monitors: Vec::new(),
+        logs,
+    })
+}
+
+/// Read a wide string from remote process memory.
+#[cfg(target_os = "windows")]
+fn read_remote_wstr(
+    h_process: windows::Win32::Foundation::HANDLE,
+    addr: usize,
+    max_chars: usize,
+) -> String {
+    if addr == 0 {
+        return "<null>".into();
+    }
+    let mut buf = vec![0u16; max_chars];
+    let byte_len = max_chars * 2;
+    let mut read = 0usize;
+    let ok = unsafe {
+        windows::Win32::System::Diagnostics::Debug::ReadProcessMemory(
+            h_process,
+            addr as *const _,
+            buf.as_mut_ptr() as *mut _,
+            byte_len,
+            Some(&mut read),
+        )
+        .is_ok()
+    };
+    if !ok {
+        return format!("<read fail@0x{:x}>", addr);
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(read / 2);
+    String::from_utf16_lossy(&buf[..len])
+}
+
+/// Read DLL name from LOAD_DLL_DEBUG_INFO (reads pointer-to-name from debuggee).
+#[cfg(target_os = "windows")]
+fn read_dll_name_from_event(
+    h_process: windows::Win32::Foundation::HANDLE,
+    info: &windows::Win32::System::Diagnostics::Debug::LOAD_DLL_DEBUG_INFO,
+) -> String {
+    let name_ptr_addr = info.lpImageName as usize;
+    if name_ptr_addr == 0 {
+        return String::new();
+    }
+    // Read pointer to name string
+    let mut name_ptr: u64 = 0;
+    if !read_remote(
+        h_process,
+        name_ptr_addr,
+        unsafe { std::slice::from_raw_parts_mut(&mut name_ptr as *mut u64 as *mut u8, 8) },
+    ) {
+        return String::new();
+    }
+    if name_ptr == 0 {
+        return String::new();
+    }
+    if info.fUnicode != 0 {
+        let s = read_remote_wstr(h_process, name_ptr as usize, 260);
+        // Extract just filename
+        s.rsplit('\\').next().unwrap_or(&s).to_string()
+    } else {
+        let mut buf = vec![0u8; 260];
+        if !read_remote(h_process, name_ptr as usize, &mut buf) {
+            return String::new();
+        }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(260);
+        let s = String::from_utf8_lossy(&buf[..len]).into_owned();
+        s.rsplit('\\').next().unwrap_or(&s).to_string()
+    }
+}
+
+/// Find which module an address belongs to (heuristic: largest base <= addr within 64MB).
+#[cfg(target_os = "windows")]
+fn find_module(addr: usize, modules: &[(usize, String)]) -> String {
+    let mut best: Option<&(usize, String)> = None;
+    for m in modules {
+        if m.0 <= addr {
+            if best.is_none() || m.0 > best.unwrap().0 {
+                best = Some(m);
+            }
+        }
+    }
+    if let Some((base, name)) = best {
+        if addr - base < 0x400_0000 {
+            return format!("{}+0x{:x}", name, addr - base);
+        }
+    }
+    format!("0x{:x}", addr)
 }
 
 /// Non-diagnostic version for connect/preflight (discards logs).
 #[cfg(target_os = "windows")]
 fn capture_mstsc_silent() -> Result<(String, Vec<LiveMonitor>), String> {
-    let result = capture_mstsc_silent_with_logs()?;
+    let result = capture_debug_target("mstsc.exe /l")?;
     Ok((result.raw_text, result.monitors))
 }
 
-/// Spawn mstsc /l as a debuggee, hook MessageBoxW to silently capture monitor text.
+/// Spawn a target as a debuggee, hook dialog functions via inline patching, capture text.
 #[cfg(target_os = "windows")]
-fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
+fn capture_debug_target(cmd: &str) -> Result<CaptureResult, String> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Foundation::*;
@@ -91,17 +570,14 @@ fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
 
     let mut logs: Vec<String> = Vec::new();
 
-    // Spawn mstsc /l as a debuggee
-    let mut cmd_line: Vec<u16> = OsStr::new("mstsc.exe /l")
+    // Spawn target as a debuggee
+    let mut cmd_line: Vec<u16> = OsStr::new(cmd)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-    // Don't use SW_HIDE - mstsc may skip MessageBoxW if window is hidden
-    // si.dwFlags = STARTF_USESHOWWINDOW;
-    // si.wShowWindow = 0;
 
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
@@ -130,9 +606,7 @@ fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
 
     logs.push(format!("Process created: PID={}", pi.dwProcessId));
 
-    // Buffer layout: [sentinel 4 bytes] [text data ...]
-    // Sentinel 0xCAFEBABE = shellcode not yet called
-    // Shellcode writes text starting at offset 0, overwriting sentinel
+    // Allocate remote buffer for captured text
     let buf_size: usize = 8192;
     let remote_buf = unsafe {
         VirtualAllocEx(
@@ -160,12 +634,85 @@ fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
         );
     }
 
-    let mut hooked = false;
-    let mut original_bytes = [0u8; 12];
-    let mut msgbox_addr: usize = 0;
+    // Allocate and write shellcode (copies lpText from RDX to buffer, returns IDOK)
+    let stub_mem = allocate_shellcode(h_process, remote_buf, &mut logs);
+
+    // Per-process tracking: each debugged process needs its own buffer/shellcode/hooks
+    struct ProcState {
+        h_process: HANDLE,
+        remote_buf: *mut std::ffi::c_void,
+        stub_mem: *mut std::ffi::c_void,
+        exe_base: usize,
+        initial_bp_handled: bool,
+        taskdlg_hooked: bool,
+    }
+    let mut procs: HashMap<u32, ProcState> = HashMap::new();
+    // Register the initial process
+    procs.insert(pi.dwProcessId, ProcState {
+        h_process,
+        remote_buf,
+        stub_mem,
+        exe_base: 0,
+        initial_bp_handled: false,
+        taskdlg_hooked: false,
+    });
+
     let mut event_count = 0u32;
     let mut dll_count = 0u32;
-    let mut initial_bp_handled = false;
+    let mut all_exited = false;
+    let mut captured_bufs: Vec<Vec<u8>> = Vec::new();
+
+    fn read_proc_sentinel(
+        h_proc: HANDLE,
+        buf: *mut std::ffi::c_void,
+        buf_size: usize,
+        pid: u32,
+        logs: &mut Vec<String>,
+        captured: &mut Vec<Vec<u8>>,
+    ) {
+        let mut sentinel_check = [0u8; 4];
+        unsafe {
+            let _ = ReadProcessMemory(h_proc, buf, sentinel_check.as_mut_ptr() as *mut _, 4, None);
+        }
+        let sentinel_val = u32::from_le_bytes(sentinel_check);
+        if sentinel_val == 0xCAFEBABE {
+            logs.push(format!("pid={}: Sentinel INTACT -> NO hook called", pid));
+        } else {
+            let marker = sentinel_check[0];
+            let name = match marker {
+                0x01 => "MessageBoxW",
+                0x02 => "MessageBoxExW",
+                0x03 => "MessageBoxIndirectW",
+                0x04 => "MessageBoxA",
+                0x05 => "MessageBoxExA",
+                0x06 => "TaskDialogIndirect",
+                0x07 => "DialogBoxParamW",
+                _ => "UNKNOWN",
+            };
+            logs.push(format!("*** pid={}: CALLED {} (marker=0x{:02x}) ***", pid, name, marker));
+
+            // Read full buffer for text extraction
+            let mut local_buf = vec![0u8; buf_size];
+            let mut bytes_read = 0usize;
+            unsafe {
+                let _ = ReadProcessMemory(h_proc, buf, local_buf.as_mut_ptr() as *mut _, buf_size, Some(&mut bytes_read));
+            }
+            local_buf.truncate(bytes_read);
+
+            let hex_preview: String = local_buf[..bytes_read.min(32)]
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(" ");
+            logs.push(format!("  Buffer hex[0..32]: {}", hex_preview));
+
+            captured.push(local_buf);
+        }
+        // Free remote memory
+        unsafe {
+            let _ = VirtualFreeEx(h_proc, buf, 0, MEM_RELEASE);
+        }
+    }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
 
@@ -182,38 +729,69 @@ fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
         }
 
         event_count += 1;
+        let event_pid = event.dwProcessId;
 
         let continue_status = match event.dwDebugEventCode {
             CREATE_PROCESS_DEBUG_EVENT => {
-                logs.push(format!("[{}] CREATE_PROCESS", event_count));
-                if !hooked {
-                    if let Some(addr) =
-                        try_hook_messagebox(h_process, remote_buf, &mut original_bytes)
-                    {
-                        hooked = true;
-                        msgbox_addr = addr;
-                        logs.push(format!("  Hook applied (addr=0x{:x})", addr));
+                let base = unsafe { event.u.CreateProcessInfo.lpBaseOfImage } as usize;
+                let child_h = unsafe { event.u.CreateProcessInfo.hProcess };
+                logs.push(format!(
+                    "[{}] CREATE_PROCESS pid={} base=0x{:x}{}",
+                    event_count, event_pid, base,
+                    if event_pid != pi.dwProcessId { " (CHILD)" } else { "" }
+                ));
+                unsafe {
+                    let h = event.u.CreateProcessInfo.hFile;
+                    if !h.is_invalid() {
+                        let _ = CloseHandle(h);
                     }
                 }
+
+                // For child processes, set up their own buffer/shellcode/hooks
+                if !procs.contains_key(&event_pid) {
+                    let child_buf = unsafe {
+                        VirtualAllocEx(child_h, None, buf_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+                    };
+                    if !child_buf.is_null() {
+                        // Write sentinel
+                        unsafe {
+                            let _ = WriteProcessMemory(child_h, child_buf, &sentinel as *const u32 as *const _, 4, None);
+                        }
+                        let child_stub = allocate_shellcode(child_h, child_buf, &mut logs);
+                        logs.push(format!("  Child pid={}: buffer={:p} stub={:p}", event_pid, child_buf, child_stub));
+                        procs.insert(event_pid, ProcState {
+                            h_process: child_h,
+                            remote_buf: child_buf,
+                            stub_mem: child_stub,
+                            exe_base: base,
+                            initial_bp_handled: false,
+                            taskdlg_hooked: false,
+                        });
+                    } else {
+                        logs.push(format!("  Child pid={}: VirtualAllocEx FAILED", event_pid));
+                    }
+                } else {
+                    if let Some(ps) = procs.get_mut(&event_pid) {
+                        ps.exe_base = base;
+                    }
+                }
+
                 DBG_CONTINUE
             }
             LOAD_DLL_DEBUG_EVENT => {
                 dll_count += 1;
-                if !hooked {
-                    if let Some(addr) =
-                        try_hook_messagebox(h_process, remote_buf, &mut original_bytes)
-                    {
-                        hooked = true;
-                        msgbox_addr = addr;
-                        logs.push(format!(
-                            "[{}] LOAD_DLL #{} -> Hook applied! (addr=0x{:x})",
-                            event_count, dll_count, addr
-                        ));
-                    } else if dll_count <= 5 {
-                        logs.push(format!(
-                            "[{}] LOAD_DLL #{} (user32 not ready)",
-                            event_count, dll_count
-                        ));
+                unsafe {
+                    let h = event.u.LoadDll.hFile;
+                    if !h.is_invalid() {
+                        let _ = CloseHandle(h);
+                    }
+                }
+                // Retry TaskDialogIndirect hook after each DLL load for this process
+                if let Some(ps) = procs.get_mut(&event_pid) {
+                    if ps.initial_bp_handled && !ps.taskdlg_hooked && !ps.stub_mem.is_null() {
+                        if try_hook_taskdialog(ps.h_process, ps.remote_buf, &mut logs) {
+                            ps.taskdlg_hooked = true;
+                        }
                     }
                 }
                 DBG_CONTINUE
@@ -222,167 +800,93 @@ fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
                 let code = unsafe { event.u.Exception.ExceptionRecord.ExceptionCode };
                 let first_chance = unsafe { event.u.Exception.dwFirstChance };
                 let addr = unsafe { event.u.Exception.ExceptionRecord.ExceptionAddress } as usize;
-                logs.push(format!(
-                    "[{}] EXCEPTION code=0x{:08x} addr=0x{:x} 1st={}",
-                    event_count, code.0, addr, first_chance
-                ));
 
-                // STATUS_BREAKPOINT - initial breakpoint and any others
                 if code.0 == 0x80000003u32 as i32 {
-                    if !initial_bp_handled {
-                        initial_bp_handled = true;
-                        logs.push("  -> Initial breakpoint (DBG_CONTINUE)".into());
+                    if let Some(ps) = procs.get_mut(&event_pid) {
+                        if !ps.initial_bp_handled {
+                            ps.initial_bp_handled = true;
+                            logs.push(format!(
+                                "[{}] Initial breakpoint pid={} ({} DLLs loaded)",
+                                event_count, event_pid, dll_count
+                            ));
+
+                            // IAT scan (diagnostic only)
+                            if ps.exe_base != 0 {
+                                scan_iat_for_info(ps.h_process, ps.exe_base, &mut logs);
+                            }
+
+                            // Inline-hook all MessageBox variants
+                            if !ps.stub_mem.is_null() {
+                                inline_hook_probe(ps.h_process, ps.stub_mem, ps.remote_buf, &mut logs);
+                            }
+                        }
                     }
                     DBG_CONTINUE
                 } else {
+                    logs.push(format!(
+                        "[{}] EXCEPTION pid={} code=0x{:08x} addr=0x{:x} 1st={}",
+                        event_count, event_pid, code.0, addr, first_chance
+                    ));
                     DBG_EXCEPTION_NOT_HANDLED
                 }
             }
             EXIT_PROCESS_DEBUG_EVENT => {
                 let exit_code = unsafe { event.u.ExitProcess.dwExitCode };
-                logs.push(format!("[{}] EXIT_PROCESS (code={})", event_count, exit_code));
-                unsafe {
-                    let _ = ContinueDebugEvent(
-                        event.dwProcessId,
-                        event.dwThreadId,
-                        DBG_CONTINUE,
-                    );
+                logs.push(format!("[{}] EXIT_PROCESS pid={} (code={})", event_count, event_pid, exit_code));
+                // Read buffer BEFORE process handle becomes invalid
+                if let Some(ps) = procs.get(&event_pid) {
+                    read_proc_sentinel(ps.h_process, ps.remote_buf, buf_size, event_pid, &mut logs, &mut captured_bufs);
                 }
-                break;
+                procs.remove(&event_pid);
+                if procs.is_empty() {
+                    unsafe {
+                        let _ = ContinueDebugEvent(event_pid, event.dwThreadId, DBG_CONTINUE);
+                    }
+                    all_exited = true;
+                    break;
+                }
+                DBG_CONTINUE
             }
             CREATE_THREAD_DEBUG_EVENT => DBG_CONTINUE,
             EXIT_THREAD_DEBUG_EVENT => DBG_CONTINUE,
             UNLOAD_DLL_DEBUG_EVENT => DBG_CONTINUE,
-            OUTPUT_DEBUG_STRING_EVENT => {
-                logs.push(format!("[{}] OUTPUT_DEBUG_STRING", event_count));
-                DBG_CONTINUE
-            }
-            other => {
-                logs.push(format!("[{}] event_code={}", event_count, other.0));
-                DBG_CONTINUE
-            }
+            OUTPUT_DEBUG_STRING_EVENT => DBG_CONTINUE,
+            _ => DBG_CONTINUE,
         };
 
         unsafe {
-            let _ = ContinueDebugEvent(event.dwProcessId, event.dwThreadId, continue_status);
+            let _ = ContinueDebugEvent(event_pid, event.dwThreadId, continue_status);
         }
     }
 
     logs.push(format!(
-        "Summary: {} events, {} DLLs, hooked={}, bp_handled={}",
-        event_count, dll_count, hooked, initial_bp_handled
+        "Summary: {} events, {} DLLs",
+        event_count, dll_count
     ));
 
-    // Verify hook is still in place
-    if hooked && msgbox_addr != 0 {
-        let mut verify = [0u8; 12];
-        let mut vread = 0usize;
-        unsafe {
-            let _ = ReadProcessMemory(
-                h_process,
-                msgbox_addr as *const _,
-                verify.as_mut_ptr() as *mut _,
-                12,
-                Some(&mut vread),
-            );
+    // Read buffers from any processes still alive (timeout case)
+    for (&pid, ps) in procs.iter() {
+        read_proc_sentinel(ps.h_process, ps.remote_buf, buf_size, pid, &mut logs, &mut captured_bufs);
+    }
+
+    // Extract text from first captured buffer that has content
+    let mut text = String::new();
+    for buf in &captured_bufs {
+        if buf.len() >= 2 {
+            let u16_slice: &[u16] =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u16, buf.len() / 2) };
+            let text_end = u16_slice
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(u16_slice.len());
+            let candidate = String::from_utf16_lossy(&u16_slice[..text_end]);
+            if !candidate.is_empty() {
+                logs.push(format!("Captured {} chars", candidate.len()));
+                logs.push(format!("Preview: {:?}", &candidate[..candidate.len().min(200)]));
+                text = candidate;
+                break;
+            }
         }
-        let hook_intact = verify[0] == 0x48 && verify[1] == 0xB8 && verify[10] == 0xFF && verify[11] == 0xE0;
-        logs.push(format!(
-            "Hook verify: intact={} bytes={:02x?}",
-            hook_intact,
-            &verify[..vread.min(12)]
-        ));
-    }
-
-    // Check sentinel
-    let mut sentinel_check = [0u8; 4];
-    unsafe {
-        let _ = ReadProcessMemory(
-            h_process,
-            remote_buf,
-            sentinel_check.as_mut_ptr() as *mut _,
-            4,
-            None,
-        );
-    }
-    let sentinel_val = u32::from_le_bytes(sentinel_check);
-    if sentinel_val == 0xCAFEBABE {
-        logs.push("Sentinel: INTACT (0xCAFEBABE) -> shellcode was NOT called".into());
-    } else {
-        logs.push(format!(
-            "Sentinel: OVERWRITTEN (0x{:08x}) -> shellcode was called!",
-            sentinel_val
-        ));
-    }
-
-    // Restore original bytes if we hooked
-    if hooked && msgbox_addr != 0 {
-        unsafe {
-            let mut old_prot = PAGE_PROTECTION_FLAGS(0);
-            let _ = VirtualProtectEx(
-                h_process,
-                msgbox_addr as *const _,
-                12,
-                PAGE_EXECUTE_READWRITE,
-                &mut old_prot,
-            );
-            let _ = WriteProcessMemory(
-                h_process,
-                msgbox_addr as *const _,
-                original_bytes.as_ptr() as *const _,
-                12,
-                None,
-            );
-            let _ = VirtualProtectEx(
-                h_process,
-                msgbox_addr as *const _,
-                12,
-                old_prot,
-                &mut old_prot,
-            );
-        }
-        logs.push("Original MessageBoxW bytes restored".into());
-    }
-
-    // Read captured text from remote buffer
-    let mut local_buf = vec![0u8; buf_size];
-    let mut bytes_read = 0usize;
-    unsafe {
-        let _ = ReadProcessMemory(
-            h_process,
-            remote_buf,
-            local_buf.as_mut_ptr() as *mut _,
-            buf_size,
-            Some(&mut bytes_read),
-        );
-    }
-    logs.push(format!("Buffer: read {} bytes", bytes_read));
-
-    // Log first 32 bytes as hex for debugging
-    let hex_preview: String = local_buf[..bytes_read.min(32)]
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join(" ");
-    logs.push(format!("Buffer hex[0..32]: {}", hex_preview));
-
-    // Free remote buffer
-    unsafe {
-        let _ = VirtualFreeEx(h_process, remote_buf, 0, MEM_RELEASE);
-    }
-
-    // Convert UTF-16 LE buffer to string
-    let u16_slice: &[u16] =
-        unsafe { std::slice::from_raw_parts(local_buf.as_ptr() as *const u16, bytes_read / 2) };
-    let text_end = u16_slice
-        .iter()
-        .position(|&c| c == 0)
-        .unwrap_or(u16_slice.len());
-    let text = String::from_utf16_lossy(&u16_slice[..text_end]);
-
-    logs.push(format!("Text: {} chars", text.len()));
-    if !text.is_empty() {
-        logs.push(format!("Preview: {:?}", &text[..text.len().min(200)]));
     }
 
     let monitors = if text.is_empty() {
@@ -407,43 +911,18 @@ fn capture_mstsc_silent_with_logs() -> Result<CaptureResult, String> {
     })
 }
 
-/// Try to find and hook MessageBoxW in the target process.
-/// Returns Some(address) if successfully hooked.
+/// Allocate shellcode in remote process that copies lpText (RDX) to buffer and returns IDOK(1).
 #[cfg(target_os = "windows")]
-fn try_hook_messagebox(
+fn allocate_shellcode(
     h_process: windows::Win32::Foundation::HANDLE,
     remote_buf: *mut std::ffi::c_void,
-    original_bytes: &mut [u8; 12],
-) -> Option<usize> {
+    logs: &mut Vec<String>,
+) -> *mut std::ffi::c_void {
     use windows::Win32::System::Diagnostics::Debug::*;
-    use windows::Win32::System::LibraryLoader::*;
     use windows::Win32::System::Memory::*;
-    use windows::core::s;
 
-    // Get MessageBoxW address from our own process (same address in target due to ASLR shared mapping)
-    let user32 = unsafe { GetModuleHandleA(s!("user32.dll")) }.ok()?;
-    let msgbox_fn = unsafe { GetProcAddress(user32, s!("MessageBoxW")) }?;
-    let msgbox_addr = msgbox_fn as usize;
-
-    // Read original bytes
-    let mut bytes_read = 0usize;
-    unsafe {
-        ReadProcessMemory(
-            h_process,
-            msgbox_addr as *const _,
-            original_bytes.as_mut_ptr() as *mut _,
-            12,
-            Some(&mut bytes_read),
-        )
-    }
-    .ok()?;
-    if bytes_read < 12 {
-        return None;
-    }
-
-    // Build shellcode stub:
     //   mov rax, <buf_addr>       ; 48 B8 <imm64>
-    // copy_loop:                  ; offset 10
+    // copy_loop:
     //   mov cx, [rdx]             ; 66 8B 0A
     //   mov [rax], cx             ; 66 89 08
     //   add rdx, 2               ; 48 83 C2 02
@@ -454,19 +933,17 @@ fn try_hook_messagebox(
     //   ret                      ; C3
     let buf_addr = remote_buf as u64;
     let mut shellcode: Vec<u8> = Vec::with_capacity(35);
-    shellcode.extend_from_slice(&[0x48, 0xB8]); // mov rax, imm64
+    shellcode.extend_from_slice(&[0x48, 0xB8]);
     shellcode.extend_from_slice(&buf_addr.to_le_bytes());
-    // copy_loop (offset 10):
-    shellcode.extend_from_slice(&[0x66, 0x8B, 0x0A]); // mov cx, [rdx]
-    shellcode.extend_from_slice(&[0x66, 0x89, 0x08]); // mov [rax], cx
-    shellcode.extend_from_slice(&[0x48, 0x83, 0xC2, 0x02]); // add rdx, 2
-    shellcode.extend_from_slice(&[0x48, 0x83, 0xC0, 0x02]); // add rax, 2
-    shellcode.extend_from_slice(&[0x66, 0x85, 0xC9]); // test cx, cx
-    shellcode.extend_from_slice(&[0x75, 0xED]); // jnz -19 (back to offset 10)
-    shellcode.extend_from_slice(&[0xB8, 0x01, 0x00, 0x00, 0x00]); // mov eax, 1
-    shellcode.push(0xC3); // ret
+    shellcode.extend_from_slice(&[0x66, 0x8B, 0x0A]);
+    shellcode.extend_from_slice(&[0x66, 0x89, 0x08]);
+    shellcode.extend_from_slice(&[0x48, 0x83, 0xC2, 0x02]);
+    shellcode.extend_from_slice(&[0x48, 0x83, 0xC0, 0x02]);
+    shellcode.extend_from_slice(&[0x66, 0x85, 0xC9]);
+    shellcode.extend_from_slice(&[0x75, 0xED]);
+    shellcode.extend_from_slice(&[0xB8, 0x01, 0x00, 0x00, 0x00]);
+    shellcode.push(0xC3);
 
-    // Allocate remote executable memory for shellcode
     let stub_mem = unsafe {
         VirtualAllocEx(
             h_process,
@@ -477,11 +954,11 @@ fn try_hook_messagebox(
         )
     };
     if stub_mem.is_null() {
-        return None;
+        logs.push("Failed to allocate shellcode memory".into());
+        return stub_mem;
     }
 
-    // Write shellcode to remote process
-    unsafe {
+    if unsafe {
         WriteProcessMemory(
             h_process,
             stub_mem,
@@ -490,56 +967,278 @@ fn try_hook_messagebox(
             None,
         )
     }
-    .ok()?;
-
-    // Build inline hook at MessageBoxW:
-    //   mov rax, <stub_addr>    ; 48 B8 <imm64>
-    //   jmp rax                 ; FF E0
-    let stub_addr = stub_mem as u64;
-    let mut hook: [u8; 12] = [0; 12];
-    hook[0] = 0x48;
-    hook[1] = 0xB8;
-    hook[2..10].copy_from_slice(&stub_addr.to_le_bytes());
-    hook[10] = 0xFF;
-    hook[11] = 0xE0;
-
-    // Make MessageBoxW writable, write hook, restore protection
-    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
-    unsafe {
-        VirtualProtectEx(
-            h_process,
-            msgbox_addr as *const _,
-            12,
-            PAGE_EXECUTE_READWRITE,
-            &mut old_prot,
-        )
+    .is_err()
+    {
+        logs.push("Failed to write shellcode".into());
+        return std::ptr::null_mut();
     }
-    .ok()?;
 
-    let write_ok = unsafe {
-        WriteProcessMemory(
+    logs.push(format!("Shellcode at {:p} ({} bytes)", stub_mem, shellcode.len()));
+    stub_mem
+}
+
+/// Read bytes from remote process memory.
+#[cfg(target_os = "windows")]
+fn read_remote(
+    h_process: windows::Win32::Foundation::HANDLE,
+    addr: usize,
+    buf: &mut [u8],
+) -> bool {
+    use windows::Win32::System::Diagnostics::Debug::*;
+    let mut read = 0usize;
+    unsafe {
+        ReadProcessMemory(
             h_process,
-            msgbox_addr as *const _,
-            hook.as_ptr() as *const _,
-            12,
-            None,
+            addr as *const _,
+            buf.as_mut_ptr() as *mut _,
+            buf.len(),
+            Some(&mut read),
         )
+        .is_ok()
+            && read == buf.len()
+    }
+}
+
+/// Diagnostic: scan mstsc.exe's IAT and log MessageBox-related imports (no hooking).
+#[cfg(target_os = "windows")]
+fn scan_iat_for_info(
+    h_process: windows::Win32::Foundation::HANDLE,
+    exe_base: usize,
+    logs: &mut Vec<String>,
+) {
+    let mut dos = [0u8; 64];
+    if !read_remote(h_process, exe_base, &mut dos) { return; }
+    if dos[0] != b'M' || dos[1] != b'Z' { return; }
+
+    let e_lfanew = u32::from_le_bytes([dos[0x3C], dos[0x3D], dos[0x3E], dos[0x3F]]) as usize;
+    let mut pe_hdr = [0u8; 264];
+    if !read_remote(h_process, exe_base + e_lfanew, &mut pe_hdr) { return; }
+    if &pe_hdr[0..4] != b"PE\0\0" { return; }
+
+    let dd1_off = 24 + 120;
+    let import_rva = u32::from_le_bytes([
+        pe_hdr[dd1_off], pe_hdr[dd1_off+1], pe_hdr[dd1_off+2], pe_hdr[dd1_off+3],
+    ]) as usize;
+    if import_rva == 0 { return; }
+
+    let import_base = exe_base + import_rva;
+    let mut desc_idx = 0u32;
+    loop {
+        let mut desc = [0u8; 20];
+        if !read_remote(h_process, import_base + (desc_idx as usize) * 20, &mut desc) { break; }
+        let ilt_rva = u32::from_le_bytes([desc[0], desc[1], desc[2], desc[3]]) as usize;
+        let name_rva = u32::from_le_bytes([desc[12], desc[13], desc[14], desc[15]]) as usize;
+        if ilt_rva == 0 && name_rva == 0 { break; }
+
+        let mut name_buf = [0u8; 128];
+        if !read_remote(h_process, exe_base + name_rva, &mut name_buf) { desc_idx += 1; continue; }
+        let name_end = name_buf.iter().position(|&b| b == 0).unwrap_or(name_buf.len());
+        let dll_name = String::from_utf8_lossy(&name_buf[..name_end]).to_string();
+
+        // Only log DLLs that might have MessageBox
+        let dll_lower = dll_name.to_lowercase();
+        let interesting = dll_lower.contains("user32") || dll_lower.contains("api-ms") || dll_lower.contains("comctl");
+
+        let ilt_base = exe_base + ilt_rva;
+        let mut entry_idx = 0usize;
+        let mut has_msgbox = false;
+        loop {
+            let mut ilt_entry = [0u8; 8];
+            if !read_remote(h_process, ilt_base + entry_idx * 8, &mut ilt_entry) { break; }
+            let ilt_val = u64::from_le_bytes(ilt_entry);
+            if ilt_val == 0 { break; }
+            if (ilt_val >> 63) != 0 { entry_idx += 1; continue; }
+
+            let hint_rva = (ilt_val & 0x7FFFFFFF) as usize;
+            let mut hint_buf = [0u8; 256];
+            if !read_remote(h_process, exe_base + hint_rva, &mut hint_buf) { entry_idx += 1; continue; }
+            let fn_end = hint_buf[2..].iter().position(|&b| b == 0).unwrap_or(hint_buf.len() - 2);
+            let fn_name = std::str::from_utf8(&hint_buf[2..2 + fn_end]).unwrap_or("");
+
+            if fn_name.contains("MessageBox") || fn_name.contains("TaskDialog") || fn_name.contains("DialogBox") {
+                if !has_msgbox { logs.push(format!("IAT [{}]: {}", desc_idx, dll_name)); has_msgbox = true; }
+                logs.push(format!("  -> {}", fn_name));
+            }
+            entry_idx += 1;
+        }
+        if interesting && !has_msgbox {
+            logs.push(format!("IAT [{}]: {} (no MessageBox funcs)", desc_idx, dll_name));
+        }
+        desc_idx += 1;
+    }
+}
+
+/// Inline-hook all MessageBox variants to probe which function actually gets called.
+/// Each hook writes a unique marker (0x01..0x06) to buf[0] and returns 1.
+#[cfg(target_os = "windows")]
+fn inline_hook_probe(
+    h_process: windows::Win32::Foundation::HANDLE,
+    _text_stub: *mut std::ffi::c_void,
+    remote_buf: *mut std::ffi::c_void,
+    logs: &mut Vec<String>,
+) {
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::Win32::System::LibraryLoader::*;
+    use windows::Win32::System::Memory::*;
+    use windows::core::s;
+
+    let user32 = match unsafe { GetModuleHandleA(s!("user32.dll")) } {
+        Ok(h) => h,
+        Err(_) => { logs.push("PROBE: can't get user32".into()); return; }
     };
-    if write_ok.is_err() {
-        return None;
+    let comctl32 = unsafe { GetModuleHandleA(s!("comctl32.dll")) }.ok();
+
+    // (display_name, c_name with null terminator, dll_handle, marker_byte)
+    let targets: Vec<(&str, &[u8], Option<windows::Win32::Foundation::HMODULE>, u8)> = vec![
+        ("MessageBoxW", b"MessageBoxW\0", Some(user32), 0x01),
+        ("MessageBoxExW", b"MessageBoxExW\0", Some(user32), 0x02),
+        ("MessageBoxIndirectW", b"MessageBoxIndirectW\0", Some(user32), 0x03),
+        ("MessageBoxA", b"MessageBoxA\0", Some(user32), 0x04),
+        ("MessageBoxExA", b"MessageBoxExA\0", Some(user32), 0x05),
+        ("TaskDialogIndirect", b"TaskDialogIndirect\0", comctl32, 0x06),
+        ("DialogBoxParamW", b"DialogBoxParamW\0", Some(user32), 0x07),
+    ];
+
+    let buf_addr = remote_buf as u64;
+
+    for (name, c_name, dll, marker) in &targets {
+        let dll_h = match dll {
+            Some(h) => *h,
+            None => { logs.push(format!("PROBE: {} - DLL not loaded", name)); continue; }
+        };
+
+        let func = unsafe { GetProcAddress(dll_h, windows::core::PCSTR(c_name.as_ptr())) };
+        let func_addr = match func {
+            Some(f) => f as usize,
+            None => { logs.push(format!("PROBE: {} - not found", name)); continue; }
+        };
+
+        // Build probe shellcode: write marker to buf, return 1
+        //   mov rax, <buf_addr>       ; 48 B8 <imm64>
+        //   mov byte [rax], <marker>  ; C6 00 <imm8>
+        //   mov eax, 1                ; B8 01 00 00 00
+        //   ret                       ; C3
+        let mut probe: Vec<u8> = Vec::with_capacity(18);
+        probe.extend_from_slice(&[0x48, 0xB8]);
+        probe.extend_from_slice(&buf_addr.to_le_bytes());
+        probe.push(0xC6); probe.push(0x00); probe.push(*marker);
+        probe.extend_from_slice(&[0xB8, 0x01, 0x00, 0x00, 0x00]);
+        probe.push(0xC3);
+
+        // Alloc + write probe shellcode in target
+        let probe_mem = unsafe {
+            VirtualAllocEx(h_process, None, probe.len(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+        };
+        if probe_mem.is_null() {
+            logs.push(format!("PROBE: {} - alloc failed", name));
+            continue;
+        }
+        if unsafe {
+            WriteProcessMemory(h_process, probe_mem, probe.as_ptr() as *const _, probe.len(), None)
+        }.is_err() {
+            logs.push(format!("PROBE: {} - write failed", name));
+            continue;
+        }
+
+        // Patch function entry: mov rax, <probe_mem>; jmp rax (12 bytes)
+        let stub_addr = probe_mem as u64;
+        let mut trampoline = [0u8; 12];
+        trampoline[0] = 0x48; trampoline[1] = 0xB8;
+        trampoline[2..10].copy_from_slice(&stub_addr.to_le_bytes());
+        trampoline[10] = 0xFF; trampoline[11] = 0xE0;
+
+        let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+        if unsafe {
+            VirtualProtectEx(h_process, func_addr as *const _, 12, PAGE_EXECUTE_READWRITE, &mut old_prot)
+        }.is_err() {
+            logs.push(format!("PROBE: {} @ 0x{:x} - VirtualProtect failed", name, func_addr));
+            continue;
+        }
+
+        let write_ok = unsafe {
+            WriteProcessMemory(h_process, func_addr as *const _, trampoline.as_ptr() as *const _, 12, None)
+        };
+        unsafe {
+            let _ = VirtualProtectEx(h_process, func_addr as *const _, 12, old_prot, &mut old_prot);
+        }
+
+        if write_ok.is_ok() {
+            logs.push(format!("PROBE: {} @ 0x{:x} -> marker 0x{:02x} HOOKED", name, func_addr, marker));
+        } else {
+            logs.push(format!("PROBE: {} @ 0x{:x} - write failed", name, func_addr));
+        }
+    }
+}
+
+/// Try to hook TaskDialogIndirect in comctl32.dll (may not be loaded yet).
+/// Returns true if successfully hooked.
+#[cfg(target_os = "windows")]
+fn try_hook_taskdialog(
+    h_process: windows::Win32::Foundation::HANDLE,
+    remote_buf: *mut std::ffi::c_void,
+    logs: &mut Vec<String>,
+) -> bool {
+    use windows::Win32::System::Diagnostics::Debug::*;
+    use windows::Win32::System::LibraryLoader::*;
+    use windows::Win32::System::Memory::*;
+    use windows::core::s;
+
+    let comctl32 = match unsafe { GetModuleHandleA(s!("comctl32.dll")) } {
+        Ok(h) => h,
+        Err(_) => return false,
+    };
+    let func = unsafe { GetProcAddress(comctl32, windows::core::PCSTR(b"TaskDialogIndirect\0".as_ptr())) };
+    let func_addr = match func {
+        Some(f) => f as usize,
+        None => return false,
+    };
+
+    // Try VirtualProtectEx - will fail if comctl32 not loaded in target
+    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+    if unsafe {
+        VirtualProtectEx(h_process, func_addr as *const _, 12, PAGE_EXECUTE_READWRITE, &mut old_prot)
+    }.is_err() {
+        return false;
     }
 
-    unsafe {
-        let _ = VirtualProtectEx(
-            h_process,
-            msgbox_addr as *const _,
-            12,
-            old_prot,
-            &mut old_prot,
-        );
+    // Build probe: write marker 0x06 to buf, return S_OK (0)
+    let buf_addr = remote_buf as u64;
+    let mut probe: Vec<u8> = Vec::with_capacity(18);
+    probe.extend_from_slice(&[0x48, 0xB8]);
+    probe.extend_from_slice(&buf_addr.to_le_bytes());
+    probe.push(0xC6); probe.push(0x00); probe.push(0x06); // mov byte [rax], 0x06
+    probe.extend_from_slice(&[0x31, 0xC0]); // xor eax, eax (return S_OK=0)
+    probe.push(0xC3); // ret
+
+    let probe_mem = unsafe {
+        VirtualAllocEx(h_process, None, probe.len(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+    };
+    if probe_mem.is_null() {
+        unsafe { let _ = VirtualProtectEx(h_process, func_addr as *const _, 12, old_prot, &mut old_prot); }
+        return false;
+    }
+    if unsafe {
+        WriteProcessMemory(h_process, probe_mem, probe.as_ptr() as *const _, probe.len(), None)
+    }.is_err() {
+        unsafe { let _ = VirtualProtectEx(h_process, func_addr as *const _, 12, old_prot, &mut old_prot); }
+        return false;
     }
 
-    Some(msgbox_addr)
+    let stub_addr = probe_mem as u64;
+    let mut trampoline = [0u8; 12];
+    trampoline[0] = 0x48; trampoline[1] = 0xB8;
+    trampoline[2..10].copy_from_slice(&stub_addr.to_le_bytes());
+    trampoline[10] = 0xFF; trampoline[11] = 0xE0;
+
+    let ok = unsafe {
+        WriteProcessMemory(h_process, func_addr as *const _, trampoline.as_ptr() as *const _, 12, None)
+    }.is_ok();
+    unsafe { let _ = VirtualProtectEx(h_process, func_addr as *const _, 12, old_prot, &mut old_prot); }
+
+    if ok {
+        logs.push(format!("PROBE: TaskDialogIndirect @ 0x{:x} -> marker 0x06 HOOKED (late)", func_addr));
+    }
+    ok
 }
 
 /// RAII guard for process/thread handles

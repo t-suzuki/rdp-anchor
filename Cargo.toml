@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2021"
 description = "RDP multi-monitor launcher that survives reboot ID changes"
 build = "build.rs"
+default-run = "rdp-launcher"
 
 [lib]
 name = "rdp_launcher_lib"
@@ -34,6 +35,10 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_Security",
 ]
+
+[[bin]]
+name = "test_msgbox"
+path = "src/bin/test_msgbox.rs"
 
 [profile.release]
 strip = true

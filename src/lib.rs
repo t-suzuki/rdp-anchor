@@ -232,6 +232,16 @@ fn test_mstsc_capture() -> Result<monitor::CaptureResult, String> {
     monitor::test_mstsc_capture()
 }
 
+#[tauri::command]
+fn test_hook_basic() -> Result<monitor::CaptureResult, String> {
+    monitor::test_hook_basic()
+}
+
+#[tauri::command]
+fn diagnose_mstsc() -> Result<monitor::CaptureResult, String> {
+    monitor::diagnose_mstsc()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = AppConfig::load();
@@ -257,6 +267,8 @@ pub fn run() {
             browse_rdp_file,
             import_rdp,
             test_mstsc_capture,
+            test_hook_basic,
+            diagnose_mstsc,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

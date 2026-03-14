@@ -548,6 +548,25 @@ function renderAdvancedTab() {
     </div>
     <div id="advTestResult"></div>
 
+    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">フック機構テスト</div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
+        Python で MessageBoxW を呼ぶプロセスを起動し、インラインフックが機能するか検証します。<br>
+        ダイアログが出なければフック成功、出ればフック機構自体に問題あり。
+      </p>
+      <button class="btn-primary" id="advHookTestBtn" onclick="runHookBasicTest()">フック機構テスト実行</button>
+    </div>
+    <div id="advHookTestResult"></div>
+
+    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
+      <div style="font-size:13px;font-weight:500;margin-bottom:8px">mstsc診断 (CreateWindowExW)</div>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
+        mstsc /l にブレークポイントを設定し、CreateWindowExW の全呼び出しをパラメータ付きで記録します。
+      </p>
+      <button class="btn-primary" id="advDiagnoseBtn" onclick="runDiagnoseMstsc()">診断実行</button>
+    </div>
+    <div id="advDiagnoseResult"></div>
+
     <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
       <div style="font-size:13px;font-weight:500;margin-bottom:8px">EnumDisplayMonitors 比較</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
@@ -661,6 +680,61 @@ async function runMstscCaptureTest() {
   } finally {
     btn.disabled = false;
     btn.textContent = 'テスト実行';
+  }
+}
+
+async function runHookBasicTest() {
+  const btn = document.getElementById('advHookTestBtn');
+  const resultEl = document.getElementById('advHookTestResult');
+  btn.disabled = true;
+  btn.textContent = '実行中...';
+  resultEl.innerHTML = '<p style="color:var(--text2);font-size:12px">Python MessageBoxW テスト中...</p>';
+
+  try {
+    const result = await invoke('test_hook_basic');
+    const logLines = (result.logs || []).map(l => esc(l)).join('\n');
+    const hasMarker = logLines.includes('CALLED');
+    const sentinelIntact = logLines.includes('INTACT');
+
+    let statusHtml = '';
+    if (hasMarker) {
+      statusHtml = '<div style="color:var(--green);font-size:12px;padding:8px 12px;background:rgba(61,214,140,.1);border-radius:var(--radius-sm);margin-bottom:12px">フック成功: プローブが呼ばれました</div>';
+    } else if (sentinelIntact) {
+      statusHtml = '<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm);margin-bottom:12px">フック失敗: センチネル未変更（フック機構自体に問題あり）</div>';
+    }
+
+    resultEl.innerHTML = `
+      ${statusHtml}
+      <div style="margin-bottom:12px">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:4px">デバッグログ:</div>
+        <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:300px;overflow-y:auto">${logLines}</pre>
+      </div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">エラー: ${esc(String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'フック機構テスト実行';
+  }
+}
+
+async function runDiagnoseMstsc() {
+  const btn = document.getElementById('advDiagnoseBtn');
+  const resultEl = document.getElementById('advDiagnoseResult');
+  btn.disabled = true;
+  btn.textContent = '診断中...';
+  resultEl.innerHTML = '';
+  try {
+    const result = await invoke('diagnose_mstsc');
+    const logLines = (result.logs || []).map(l => esc(l)).join('\n');
+    resultEl.innerHTML = `
+      <div style="margin:8px 0">
+        <pre style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;font-size:11px;font-family:var(--mono);color:var(--text);white-space:pre-wrap;overflow-x:auto;max-height:500px;overflow-y:auto">${logLines}</pre>
+      </div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px 12px;background:rgba(232,84,84,.1);border-radius:var(--radius-sm)">エラー: ${esc(String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '診断実行';
   }
 }
 
