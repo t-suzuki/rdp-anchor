@@ -216,6 +216,7 @@ const I18N = {
   'general.langJa': { ja: '日本語', en: '日本語 (Japanese)' },
   'general.langEn': { ja: 'English', en: 'English' },
   'general.minimizeOnConnect': { ja: 'RDP接続後にウィンドウを最小化', en: 'Minimize window after RDP connect' },
+  'general.relocateToPrimary': { ja: '接続後にプロファイルのプライマリモニターへ移動', en: 'Relocate to profile primary monitor after connect' },
   // Monitors tab
   'monitors.currentDetected': { ja: '現在検出中のモニター:', en: 'Currently detected monitors:' },
   'monitors.noDefs': { ja: 'モニター定義がありません。「自動検出」で作成してください。', en: 'No monitor definitions. Use "Auto Detect" to create them.' },
@@ -256,6 +257,8 @@ const I18N = {
   'adv.idsMismatch': { ja: '\u2717 IDが一致しません \u2014 フックによるID補正が必要です', en: '\u2717 IDs do not match \u2014 hook-based ID correction needed' },
   'adv.demoMode': { ja: 'デモデータを表示', en: 'Show demo data' },
   'adv.demoDesc': { ja: 'ホスト名やRDPファイルパスをダミーデータで表示します。スクリーンショット共有時などに。', en: 'Display dummy data for host names and RDP file paths. Useful when sharing screenshots.' },
+  'adv.saveLastRdp': { ja: '最後の起動用.rdpを保存', en: 'Save last launch .rdp' },
+  'adv.saveLastRdpDesc': { ja: '接続時に生成した.rdpファイルのコピーを設定フォルダ(AppData)に保存します。デバッグ用。', en: 'Save a copy of the generated .rdp file to the config folder (AppData) for debugging.' },
   'adv.running': { ja: '実行中...', en: 'Running...' },
   'adv.diagnosing': { ja: '診断中...', en: 'Diagnosing...' },
   // Profiles tab
@@ -746,12 +749,21 @@ function renderGeneralTab() {
     <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:16px;font-size:13px;color:var(--text)">
       <input type="checkbox" id="minimizeOnConnect" ${S.config.minimize_on_connect ? 'checked' : ''} onchange="toggleMinimizeOnConnect(this.checked)">
       ${t('general.minimizeOnConnect')}
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px;font-size:13px;color:var(--text)">
+      <input type="checkbox" id="relocateToPrimary" ${S.config.relocate_to_primary ? 'checked' : ''} onchange="toggleRelocateToPrimary(this.checked)">
+      ${t('general.relocateToPrimary')}
     </label>`;
   document.getElementById('settingsFooter').innerHTML = '';
 }
 
 async function toggleMinimizeOnConnect(val) {
   S.config.minimize_on_connect = val;
+  try { await invoke('save_config', { newConfig: S.config }); } catch (e) { console.error(e); }
+}
+
+async function toggleRelocateToPrimary(val) {
+  S.config.relocate_to_primary = val;
   try { await invoke('save_config', { newConfig: S.config }); } catch (e) { console.error(e); }
 }
 
@@ -874,6 +886,14 @@ function renderAdvancedTab() {
       <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">${t('adv.demoDesc')}</p>
     </div>
 
+    <div style="margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="saveLastRdpCheck" ${S.config.save_last_rdp ? 'checked' : ''} onchange="toggleSaveLastRdp(this.checked)">
+        <span style="font-size:13px;font-weight:500">${t('adv.saveLastRdp')}</span>
+      </label>
+      <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">${t('adv.saveLastRdpDesc')}</p>
+    </div>
+
     <div style="margin-bottom:16px;border-top:1px solid var(--border);padding-top:16px">
       <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.captureTest')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
@@ -950,6 +970,11 @@ async function toggleDemoMode(val) {
   S.config.demo_mode = val;
   try { await invoke('save_config', { newConfig: S.config }); } catch (e) { console.error(e); }
   renderMain();
+}
+
+async function toggleSaveLastRdp(val) {
+  S.config.save_last_rdp = val;
+  try { await invoke('save_config', { newConfig: S.config }); } catch (e) { console.error(e); }
 }
 
 async function runMstscCaptureTest() {

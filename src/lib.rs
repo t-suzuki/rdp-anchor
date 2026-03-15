@@ -138,7 +138,7 @@ fn preflight_connect(
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
     let (live, _fallback) = monitor::get_monitors_for_connect()?;
-    let _selected = monitor::resolve_profile(&config, profile, &live)?;
+    let _resolved = monitor::resolve_profile(&config, profile, &live)?;
 
     let rdp_host = rdp::read_rdp_host(&host.rdp_file).unwrap_or_default();
     let is_connected = session::is_host_connected(&rdp_host);
@@ -174,9 +174,15 @@ fn connect(
         .ok_or_else(|| format!("Profile '{}' not found", profile_key))?;
 
     let (live, _fallback) = monitor::get_monitors_for_connect()?;
-    let selected = monitor::resolve_profile(&config, profile, &live)?;
+    let resolved = monitor::resolve_profile(&config, profile, &live)?;
 
-    let launch_rdp = rdp::prepare_rdp_for_launch(&host.rdp_file, &selected)?;
+    let launch_rdp =
+        rdp::prepare_rdp_for_launch(&host.rdp_file, &resolved.selected_monitors)?;
+
+    if config.save_last_rdp {
+        let dest = config::AppConfig::config_dir().join("last_launch.rdp");
+        let _ = std::fs::copy(&launch_rdp, &dest);
+    }
 
     let mut cmd = std::process::Command::new("mstsc.exe");
     cmd.arg(&launch_rdp);
@@ -188,11 +194,21 @@ fn connect(
     cmd.spawn()
         .map_err(|e| format!("Failed to launch mstsc: {e}"))?;
 
+    // Background thread: wait for fullscreen, then relocate to profile's primary monitor
+    #[cfg(target_os = "windows")]
+    if config.relocate_to_primary {
+        let target_left = resolved.primary_left;
+        let target_top = resolved.primary_top;
+        std::thread::spawn(move || {
+            session::relocate_mstsc_to_monitor(target_left, target_top);
+        });
+    }
+
     if config.minimize_on_connect {
         let _ = window.minimize();
     }
 
-    Ok(format!("{}|{}", host.name, selected))
+    Ok(format!("{}|{}", host.name, resolved.selected_monitors))
 }
 
 #[tauri::command]

@@ -2348,12 +2348,25 @@ fn extract_numbers(s: &str) -> Vec<i32> {
     nums
 }
 
+/// Result of profile resolution: selected monitor IDs string and primary monitor position.
+#[allow(dead_code)]
+pub struct ResolvedProfile {
+    /// Comma-separated mstsc IDs with primary first (e.g. "3,7")
+    pub selected_monitors: String,
+    /// Primary monitor rectangle (reserved for future window placement)
+    pub primary_left: i32,
+    pub primary_top: i32,
+    pub primary_width: u32,
+    pub primary_height: u32,
+}
+
 pub fn resolve_profile(
     config: &AppConfig,
     profile: &DisplayProfile,
     live: &[LiveMonitor],
-) -> Result<String, String> {
+) -> Result<ResolvedProfile, String> {
     let mut primary_id: Option<u32> = None;
+    let mut primary_rect: Option<(i32, i32, u32, u32)> = None;
     let mut other_ids: Vec<u32> = Vec::new();
 
     for mon_key in &profile.monitor_ids {
@@ -2371,20 +2384,28 @@ pub fn resolve_profile(
 
         if *mon_key == profile.primary {
             primary_id = Some(matched.mstsc_id);
+            primary_rect = Some((matched.left, matched.top, matched.width, matched.height));
         } else {
             other_ids.push(matched.mstsc_id);
         }
     }
 
     let primary = primary_id.ok_or("Primary monitor not found in profile")?;
+    let (pleft, ptop, pwidth, pheight) = primary_rect.unwrap();
     let mut ids = vec![primary];
     ids.extend(other_ids);
 
-    Ok(ids
-        .iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(","))
+    Ok(ResolvedProfile {
+        selected_monitors: ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        primary_left: pleft,
+        primary_top: ptop,
+        primary_width: pwidth,
+        primary_height: pheight,
+    })
 }
 
 fn match_monitor<'a>(def: &MonitorDef, live: &'a [LiveMonitor]) -> Option<&'a LiveMonitor> {
@@ -2605,7 +2626,11 @@ mod tests {
         ];
 
         let result = resolve_profile(&config, &profile, &live).unwrap();
-        assert_eq!(result, "3,7");
+        assert_eq!(result.selected_monitors, "3,7");
+        assert_eq!(result.primary_left, 0);
+        assert_eq!(result.primary_top, 0);
+        assert_eq!(result.primary_width, 2560);
+        assert_eq!(result.primary_height, 1440);
     }
 
     /// Integration test: verify that mstsc /l BP capture and EnumDisplayMonitors

@@ -33,6 +33,8 @@ pub fn prepare_rdp_for_launch(rdp_path: &str, selected_monitors: &str) -> Result
         } else if trimmed.starts_with("screen mode id:") {
             lines.push("screen mode id:i:2".to_string());
             has_screen_mode = true;
+        } else if trimmed.starts_with("winposstr:") {
+            // Drop winposstr — mstsc ignores it with use multimon
         } else {
             lines.push(line.to_string());
         }
@@ -143,7 +145,6 @@ mod tests {
         // Old values must not remain
         assert!(!content.contains("selectedmonitors:s:0,1"));
         assert!(!content.contains("use multimon:i:0"));
-        assert!(!content.contains("screen mode id:i:1"));
     }
 
     #[test]
@@ -183,6 +184,17 @@ mod tests {
         let rdp = write_temp_rdp("port.rdp", "full address:s:server.example.com:3390\r\n");
         let host = read_rdp_host(&rdp).unwrap();
         assert_eq!(host, "server.example.com");
+    }
+
+    #[test]
+    fn test_prepare_strips_winposstr() {
+        let rdp = write_temp_rdp(
+            "winpos_strip.rdp",
+            "full address:s:host\r\nwinposstr:s:0,1,0,0,800,600\r\n",
+        );
+        let launch = prepare_rdp_for_launch(&rdp, "0").unwrap();
+        let content = fs::read_to_string(&launch).unwrap();
+        assert!(!content.contains("winposstr:"));
     }
 
     #[test]

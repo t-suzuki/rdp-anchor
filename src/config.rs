@@ -43,6 +43,10 @@ pub struct AppConfig {
     pub minimize_on_connect: bool,
     #[serde(default)]
     pub demo_mode: bool,
+    #[serde(default)]
+    pub save_last_rdp: bool,
+    #[serde(default)]
+    pub relocate_to_primary: bool,
 }
 
 fn default_language() -> String {
@@ -58,6 +62,8 @@ impl Default for AppConfig {
             language: default_language(),
             minimize_on_connect: false,
             demo_mode: false,
+            save_last_rdp: false,
+            relocate_to_primary: false,
         }
     }
 }
