@@ -3,12 +3,12 @@ mod monitor;
 mod rdp;
 mod session;
 
-use config::{AppConfig, DisplayProfile, HostEntry, MonitorDef};
+use config::{AppConfig, DisplayProfile, HostEntry, MonitorDef, SavedWindowPosition};
 use monitor::LiveMonitor;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
 struct AppState {
     config: Mutex<AppConfig>,
@@ -262,6 +262,11 @@ fn diagnose_mstsc() -> Result<monitor::CaptureResult, String> {
 }
 
 #[tauri::command]
+fn show_window(window: tauri::Window) {
+    let _ = window.show();
+}
+
+#[tauri::command]
 fn is_debug_build() -> bool {
     cfg!(debug_assertions)
 }
@@ -293,8 +298,103 @@ pub fn run() {
             test_mstsc_capture,
             test_hook_basic,
             diagnose_mstsc,
+            show_window,
             is_debug_build,
         ])
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            let config = state.config.lock().unwrap();
+            let should_restore = config.remember_window_position;
+            let saved = config.window_position.clone();
+            drop(config);
+
+            if let Some(win) = app.get_webview_window("main") {
+                if should_restore {
+                    if let Some(saved) = saved {
+                        if let Some((x, y, w, h)) = resolve_saved_position(&saved) {
+                            let _ = win.set_position(
+                                tauri::PhysicalPosition::<i32>::new(x, y),
+                            );
+                            let _ = win.set_size(
+                                tauri::PhysicalSize::<u32>::new(w, h),
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let state = window.state::<AppState>();
+                let mut config = state.config.lock().unwrap();
+                if config.remember_window_position {
+                    if let (Ok(pos), Ok(size)) =
+                        (window.outer_position(), window.inner_size())
+                    {
+                        config.window_position =
+                            compute_window_position(pos, size);
+                        let _ = config.save();
+                    }
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Compute window position as ratios relative to the containing monitor.
+fn compute_window_position(
+    pos: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+) -> Option<SavedWindowPosition> {
+    let monitors = monitor::get_current_monitors().unwrap_or_default();
+    let center_x = pos.x + size.width as i32 / 2;
+    let center_y = pos.y + size.height as i32 / 2;
+
+    let mon = monitors.iter().find(|m| {
+        center_x >= m.left
+            && center_x < m.left + m.width as i32
+            && center_y >= m.top
+            && center_y < m.top + m.height as i32
+    })?;
+
+    Some(SavedWindowPosition {
+        monitor_width: mon.width,
+        monitor_height: mon.height,
+        x_ratio: (pos.x - mon.left) as f64 / mon.width as f64,
+        y_ratio: (pos.y - mon.top) as f64 / mon.height as f64,
+        width_ratio: size.width as f64 / mon.width as f64,
+        height_ratio: size.height as f64 / mon.height as f64,
+    })
+}
+
+/// Resolve a saved position to absolute coordinates. Returns None if no matching
+/// monitor exists or the window wouldn't fit entirely on any monitor.
+fn resolve_saved_position(saved: &SavedWindowPosition) -> Option<(i32, i32, u32, u32)> {
+    let monitors = monitor::get_current_monitors().ok()?;
+
+    // Find a monitor with matching resolution
+    let mon = monitors
+        .iter()
+        .find(|m| m.width == saved.monitor_width && m.height == saved.monitor_height)?;
+
+    let x = mon.left + (saved.x_ratio * mon.width as f64) as i32;
+    let y = mon.top + (saved.y_ratio * mon.height as f64) as i32;
+    let w = (saved.width_ratio * mon.width as f64).max(200.0) as u32;
+    let h = (saved.height_ratio * mon.height as f64).max(200.0) as u32;
+
+    // Window must fit entirely within at least one monitor
+    let fits = monitors.iter().any(|m| {
+        x >= m.left
+            && y >= m.top
+            && x + w as i32 <= m.left + m.width as i32
+            && y + h as i32 <= m.top + m.height as i32
+    });
+
+    if fits {
+        Some((x, y, w, h))
+    } else {
+        None
+    }
 }

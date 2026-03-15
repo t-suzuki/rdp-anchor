@@ -47,6 +47,10 @@ pub struct AppConfig {
     pub save_last_rdp: bool,
     #[serde(default)]
     pub relocate_to_primary: bool,
+    #[serde(default)]
+    pub remember_window_position: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_position: Option<SavedWindowPosition>,
 }
 
 fn default_language() -> String {
@@ -64,8 +68,21 @@ impl Default for AppConfig {
             demo_mode: false,
             save_last_rdp: false,
             relocate_to_primary: false,
+            remember_window_position: false,
+            window_position: None,
         }
     }
+}
+
+/// Window position saved relative to a monitor (ratio-based for DPI/layout resilience).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedWindowPosition {
+    pub monitor_width: u32,
+    pub monitor_height: u32,
+    pub x_ratio: f64,
+    pub y_ratio: f64,
+    pub width_ratio: f64,
+    pub height_ratio: f64,
 }
 
 impl AppConfig {
@@ -96,4 +113,5 @@ impl AppConfig {
         fs::write(Self::config_path(), json).map_err(|e| format!("Write error: {e}"))?;
         Ok(())
     }
+
 }
