@@ -215,6 +215,7 @@ const I18N = {
   'general.language': { ja: '言語 / Language', en: 'Language / 言語' },
   'general.langJa': { ja: '日本語', en: '日本語 (Japanese)' },
   'general.langEn': { ja: 'English', en: 'English' },
+  'general.minimizeOnConnect': { ja: 'RDP接続後にウィンドウを最小化', en: 'Minimize window after RDP connect' },
   // Monitors tab
   'monitors.currentDetected': { ja: '現在検出中のモニター:', en: 'Currently detected monitors:' },
   'monitors.noDefs': { ja: 'モニター定義がありません。「自動検出」で作成してください。', en: 'No monitor definitions. Use "Auto Detect" to create them.' },
@@ -253,6 +254,8 @@ const I18N = {
   'adv.match': { ja: '一致', en: 'Match' },
   'adv.idsMatch': { ja: '\u2713 EnumDisplayMonitors と mstsc のIDは一致しています', en: '\u2713 EnumDisplayMonitors and mstsc IDs match' },
   'adv.idsMismatch': { ja: '\u2717 IDが一致しません \u2014 フックによるID補正が必要です', en: '\u2717 IDs do not match \u2014 hook-based ID correction needed' },
+  'adv.demoMode': { ja: 'デモデータを表示', en: 'Show demo data' },
+  'adv.demoDesc': { ja: 'ホスト名やRDPファイルパスをダミーデータで表示します。スクリーンショット共有時などに。', en: 'Display dummy data for host names and RDP file paths. Useful when sharing screenshots.' },
   'adv.running': { ja: '実行中...', en: 'Running...' },
   'adv.diagnosing': { ja: '診断中...', en: 'Diagnosing...' },
   // Profiles tab
@@ -520,9 +523,9 @@ function updateCardPreview(hostId, profileId) {
 function openGitHub() {
   const url = 'https://github.com/t-suzuki/rdp-anchor';
   const t = window.__TAURI__;
-  if (t) {
-    const shell = t['plugin:shell'];
-    if (shell?.open) { shell.open(url); return; }
+  if (t?.core?.invoke) {
+    t.core.invoke('plugin:shell|open', { path: url }).catch(() => window.open(url, '_blank'));
+    return;
   }
   window.open(url, '_blank');
 }
@@ -552,8 +555,13 @@ function renderMain() {
     return;
   }
 
+  const demoNames = ['Production Server', 'Staging Environment', 'Dev Machine', 'QA Server', 'Build Server', 'DB Server', 'Web Frontend', 'API Gateway'];
+  const demoHosts = ['prod-svr01', 'stg-web02', 'dev-pc03', 'qa-runner04', 'build-ci05', 'db-master06', 'web-front07', 'api-gw08'];
+  const isDemo = !!S.config.demo_mode;
+
   let cards = hosts.map((h, idx) => {
-    const rdpHost = h.rdp_file.split(/[/\\]/).pop().replace('.rdp', '');
+    const displayName = isDemo ? demoNames[idx % demoNames.length] : h.name;
+    const rdpHost = isDemo ? demoHosts[idx % demoHosts.length] : h.rdp_file.split(/[/\\]/).pop().replace('.rdp', '');
     const sess = S.activeSessions.find(s =>
       s.hostname.toLowerCase().includes(h.name.toLowerCase()) ||
       h.name.toLowerCase().includes(s.hostname.toLowerCase())
@@ -575,7 +583,7 @@ function renderMain() {
         <div class="color-tag" style="${colorStyle}"></div>
         <div class="status ${isActive ? 'active' : 'inactive'}"></div>
         <div class="info">
-          <div class="card-name">${esc(h.name)}</div>
+          <div class="card-name">${esc(displayName)}</div>
           <div class="card-host">${esc(rdpHost)}</div>
         </div>
         <div class="card-actions">
@@ -734,8 +742,19 @@ function renderGeneralTab() {
         <option value="ja" ${currentLang === 'ja' ? 'selected' : ''}>${t('general.langJa')}</option>
         <option value="en" ${currentLang === 'en' ? 'selected' : ''}>${t('general.langEn')}</option>
       </select>
+    </div>
+    <div class="field" style="margin-top:16px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="minimizeOnConnect" ${S.config.minimize_on_connect ? 'checked' : ''} onchange="toggleMinimizeOnConnect(this.checked)">
+        ${t('general.minimizeOnConnect')}
+      </label>
     </div>`;
   document.getElementById('settingsFooter').innerHTML = '';
+}
+
+async function toggleMinimizeOnConnect(val) {
+  S.config.minimize_on_connect = val;
+  try { await invoke('save_config', { newConfig: S.config }); } catch (e) { console.error(e); }
 }
 
 async function changeLanguage(lang) {
@@ -850,6 +869,14 @@ function renderAdvancedTab() {
   const body = document.getElementById('settingsBody');
   body.innerHTML = `
     <div style="margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="demoModeCheck" ${S.config.demo_mode ? 'checked' : ''} onchange="toggleDemoMode(this.checked)">
+        <span style="font-size:13px;font-weight:500">${t('adv.demoMode')}</span>
+      </label>
+      <p style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5">${t('adv.demoDesc')}</p>
+    </div>
+
+    <div style="margin-bottom:16px;border-top:1px solid var(--border);padding-top:16px">
       <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.captureTest')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
         ${t('adv.captureDesc')}
@@ -919,6 +946,12 @@ function renderAdvancedTab() {
   } else {
     enumEl.innerHTML = `<p style="color:var(--text3);font-size:12px">${t('adv.noMonitors')}</p>`;
   }
+}
+
+async function toggleDemoMode(val) {
+  S.config.demo_mode = val;
+  try { await invoke('save_config', { newConfig: S.config }); } catch (e) { console.error(e); }
+  renderMain();
 }
 
 async function runMstscCaptureTest() {

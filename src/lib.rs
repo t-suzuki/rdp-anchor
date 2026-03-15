@@ -154,6 +154,7 @@ fn preflight_connect(
 
 #[tauri::command]
 fn connect(
+    window: tauri::Window,
     state: State<AppState>,
     host_id: String,
     profile_id: Option<String>,
@@ -186,6 +187,10 @@ fn connect(
     }
     cmd.spawn()
         .map_err(|e| format!("Failed to launch mstsc: {e}"))?;
+
+    if config.minimize_on_connect {
+        let _ = window.minimize();
+    }
 
     Ok(format!("{}|{}", host.name, selected))
 }

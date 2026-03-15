@@ -39,6 +39,10 @@ pub struct AppConfig {
     pub hosts: Vec<HostEntry>,
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default)]
+    pub minimize_on_connect: bool,
+    #[serde(default)]
+    pub demo_mode: bool,
 }
 
 fn default_language() -> String {
@@ -52,6 +56,8 @@ impl Default for AppConfig {
             profiles: HashMap::new(),
             hosts: Vec::new(),
             language: default_language(),
+            minimize_on_connect: false,
+            demo_mode: false,
         }
     }
 }
