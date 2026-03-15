@@ -240,6 +240,11 @@ fn diagnose_mstsc() -> Result<monitor::CaptureResult, String> {
     monitor::diagnose_mstsc()
 }
 
+#[tauri::command]
+fn is_debug_build() -> bool {
+    cfg!(debug_assertions)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = AppConfig::load();
@@ -267,6 +272,7 @@ pub fn run() {
             test_mstsc_capture,
             test_hook_basic,
             diagnose_mstsc,
+            is_debug_build,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

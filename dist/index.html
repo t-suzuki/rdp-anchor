@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>RDP Launcher v0.0.1</title>
+<title>RDP Anchor v0.0.1</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -152,9 +152,9 @@ main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 <body>
 
 <header>
-  <h1>RDP Launcher <span style="font-size:11px;font-weight:400;color:var(--text3)">v0.0.1</span></h1>
+  <h1>RDP Anchor <span style="font-size:11px;font-weight:400;color:var(--text3)">v0.0.1</span></h1>
   <span id="fallbackBadge" style="display:none;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--amber);color:#000;font-weight:600;white-space:nowrap" title="mstsc BP capture failed. Monitor IDs may be incorrect after reboot.">ID fallback</span>
-  <a href="#" onclick="event.preventDefault();openGitHub()" style="-webkit-app-region:no-drag;color:var(--text2);font-size:18px;line-height:1;text-decoration:none;padding:4px" title="GitHub: t-suzuki/rdp-launcher"><svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+  <a href="#" onclick="event.preventDefault();openGitHub()" style="-webkit-app-region:no-drag;color:var(--text2);font-size:18px;line-height:1;text-decoration:none;padding:4px" title="GitHub: t-suzuki/rdp-anchor"><svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
   <button class="btn-ghost" id="settingsBtn" onclick="openSettings()" style="font-size:15px">&#x2699; 設定</button>
 </header>
 
@@ -518,7 +518,7 @@ function updateCardPreview(hostId, profileId) {
 }
 
 function openGitHub() {
-  const url = 'https://github.com/t-suzuki/rdp-launcher';
+  const url = 'https://github.com/t-suzuki/rdp-anchor';
   const t = window.__TAURI__;
   if (t) {
     const shell = t['plugin:shell'];
@@ -858,6 +858,7 @@ function renderAdvancedTab() {
     </div>
     <div id="advTestResult"></div>
 
+    <div id="advDebugOnlySections" style="display:none">
     <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
       <div style="font-size:13px;font-weight:500;margin-bottom:8px">${t('adv.hookTest')}</div>
       <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
@@ -882,9 +883,17 @@ function renderAdvancedTab() {
         ${t('adv.enumDesc')}
       </p>
       <div id="advEnumResult"></div>
+    </div>
     </div>`;
 
   document.getElementById('settingsFooter').innerHTML = '';
+
+  invoke('is_debug_build').then(isDebug => {
+    if (isDebug) {
+      const el = document.getElementById('advDebugOnlySections');
+      if (el) el.style.display = '';
+    }
+  });
 
   const enumEl = document.getElementById('advEnumResult');
   if (S.liveMonitors.length > 0) {
