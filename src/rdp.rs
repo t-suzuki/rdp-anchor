@@ -113,3 +113,87 @@ pub fn read_rdp_info(path: &str) -> Result<RdpInfo, String> {
         path: path.to_string(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_temp_rdp(name: &str, content: &str) -> String {
+        let dir = std::env::temp_dir().join("rdp_anchor_test");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn test_prepare_replaces_existing_monitor_settings() {
+        let rdp = write_temp_rdp(
+            "replace.rdp",
+            "full address:s:myhost\r\nselectedmonitors:s:0,1\r\nuse multimon:i:0\r\nscreen mode id:i:1\r\naudiomode:i:0\r\n",
+        );
+        let launch = prepare_rdp_for_launch(&rdp, "3,7").unwrap();
+        let content = fs::read_to_string(&launch).unwrap();
+
+        assert!(content.contains("selectedmonitors:s:3,7"));
+        assert!(content.contains("use multimon:i:1"));
+        assert!(content.contains("screen mode id:i:2"));
+        assert!(content.contains("audiomode:i:0"), "other settings must be preserved");
+        // Old values must not remain
+        assert!(!content.contains("selectedmonitors:s:0,1"));
+        assert!(!content.contains("use multimon:i:0"));
+        assert!(!content.contains("screen mode id:i:1"));
+    }
+
+    #[test]
+    fn test_prepare_adds_missing_monitor_settings() {
+        let rdp = write_temp_rdp(
+            "add.rdp",
+            "full address:s:myhost\r\naudiomode:i:0\r\n",
+        );
+        let launch = prepare_rdp_for_launch(&rdp, "2").unwrap();
+        let content = fs::read_to_string(&launch).unwrap();
+
+        assert!(content.contains("selectedmonitors:s:2"));
+        assert!(content.contains("use multimon:i:1"));
+        assert!(content.contains("screen mode id:i:2"));
+        assert!(content.contains("full address:s:myhost"));
+    }
+
+    #[test]
+    fn test_prepare_preserves_primary_first_order() {
+        let rdp = write_temp_rdp("order.rdp", "full address:s:host\r\n");
+        let launch = prepare_rdp_for_launch(&rdp, "5,1,3").unwrap();
+        let content = fs::read_to_string(&launch).unwrap();
+
+        // The value should be passed through as-is (caller is responsible for ordering)
+        assert!(content.contains("selectedmonitors:s:5,1,3"));
+    }
+
+    #[test]
+    fn test_prepare_output_path() {
+        let rdp = write_temp_rdp("myconn.rdp", "full address:s:host\r\n");
+        let launch = prepare_rdp_for_launch(&rdp, "0").unwrap();
+        assert!(launch.ends_with("myconn_launch.rdp"));
+    }
+
+    #[test]
+    fn test_read_rdp_host_with_port() {
+        let rdp = write_temp_rdp("port.rdp", "full address:s:server.example.com:3390\r\n");
+        let host = read_rdp_host(&rdp).unwrap();
+        assert_eq!(host, "server.example.com");
+    }
+
+    #[test]
+    fn test_read_rdp_info_defaults() {
+        let rdp = write_temp_rdp(
+            "info.rdp",
+            "full address:s:myhost\r\nusername:s:admin\r\n",
+        );
+        let info = read_rdp_info(&rdp).unwrap();
+        assert_eq!(info.host, "myhost");
+        assert_eq!(info.username.as_deref(), Some("admin"));
+        assert_eq!(info.port, 3389);
+    }
+}
