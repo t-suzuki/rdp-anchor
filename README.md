@@ -14,76 +14,36 @@
 
 - **Rust**: https://rustup.rs/ からインストール
 - **Tauri CLI**: `cargo install tauri-cli` (v2)
+- **just**: `cargo install just` — タスクランナー
 - **Windows 10 1903以降** (mstsc /l のサポートとWebView2)
-- **WiX Toolset v3**: MSIインストーラー生成に必要 (Tauri が自動でダウンロードするため手動インストール不要)
-- **just** (任意): `cargo install just` — タスクランナー
 
-### ビルド
-
-`just` がインストール済みなら:
+### タスク一覧
 
 ```bash
-just build            # ビルド + ZIP生成
+just dev              # 開発モード (ホットリロード)
+just check            # コンパイルチェック
+just build            # リリースビルド + ZIP生成
 just release 0.1.0    # バージョン更新 + コミット + タグ + ビルド
-just dev              # 開発モード
+just release-build    # バージョン変更なしでリリースビルド
+just gen-readme       # docs/README.template.md からバイリンガルREADME生成
+just icon path.png    # アイコン生成 (1024x1024以上のPNG)
 ```
 
-`just` なしの場合:
+### 成果物
 
-```bash
-cargo tauri build
-```
+| ファイル | パス |
+|---|---|
+| 実行ファイル | `target/release/rdp-anchor.exe` |
+| MSI (英語) | `target/release/bundle/msi/RDP Anchor_<ver>_x64_en-US.msi` |
+| MSI (日本語) | `target/release/bundle/msi/RDP Anchor_<ver>_x64_ja-JP.msi` |
+| ZIP | `target/release/bundle/zip/RDP-Anchor_<ver>_x64.zip` |
 
-成果物:
-- 実行ファイル: `target/release/rdp-anchor.exe`
-- MSIインストーラー (英語): `target/release/bundle/msi/RDP Anchor_0.0.1_x64_en-US.msi`
-- MSIインストーラー (日本語): `target/release/bundle/msi/RDP Anchor_0.0.1_x64_ja-JP.msi`
+### リリース手順
 
-ZIP配布版を作成する場合:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/package-zip.ps1
-```
-
-- ZIP: `target/release/bundle/zip/RDP-Anchor_0.0.1_x64.zip`
-- 内容: `rdp-anchor.exe`, `README.en_US.md`, `README.ja_JP.md`
-
-配布用READMEは `docs/README.template.md` から自動生成される。
-テンプレートを編集後、手動で生成する場合:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/gen-readme.ps1
-```
-
-### リリース
-
-ビルドのみ (バージョン変更なし):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/release.ps1
-```
-
-バージョン更新 + コミット + タグ + ビルド:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -Version 0.1.0
-```
-
-バージョンは以下のファイルで自動更新される:
-`Cargo.toml`, `tauri.conf.json`, `dist/index.html`, `scripts/package-zip.ps1`, `README.md`
-
-### 開発モード
-
-```bash
-cargo tauri dev
-```
-
-### アイコン生成 (初回のみ)
-
-```bash
-# 1024x1024 以上の PNG を用意して
-cargo tauri icon path/to/source-icon.png
-```
+`just release <ver>` は以下を自動実行:
+1. `Cargo.toml`, `tauri.conf.json`, `dist/index.html`, `scripts/package-zip.ps1`, `README.md` のバージョン更新
+2. コミット + タグ (`v<ver>`)
+3. リリースビルド + ZIP/MSI生成
 
 ### アーキテクチャ
 
