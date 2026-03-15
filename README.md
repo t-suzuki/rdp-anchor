@@ -98,8 +98,19 @@
 - **Tauri CLI**: `cargo install tauri-cli` (v2)
 - **Windows 10 1903以降** (mstsc /l のサポートとWebView2)
 - **WiX Toolset v3**: MSIインストーラー生成に必要 (Tauri が自動でダウンロードするため手動インストール不要)
+- **just** (任意): `cargo install just` — タスクランナー
 
 ### ビルド
+
+`just` がインストール済みなら:
+
+```bash
+just build            # ビルド + ZIP生成
+just release 0.1.0    # バージョン更新 + コミット + タグ + ビルド
+just dev              # 開発モード
+```
+
+`just` なしの場合:
 
 ```bash
 cargo tauri build
