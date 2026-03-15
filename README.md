@@ -1,4 +1,4 @@
-# RDP Launcher
+# RDP Anchor
 
 **再起動でモニターIDがずれても、意図通りのマルチモニターRDP接続ができるGUIランチャー。**
 
@@ -50,7 +50,7 @@
 
 ## 設定ファイル
 
-`%APPDATA%/rdp-launcher/config.json` に保存。手動編集も可能:
+`%APPDATA%/rdp-anchor/config.json` に保存。手動編集も可能:
 
 ```json
 {
@@ -106,9 +106,9 @@ cargo tauri build
 ```
 
 成果物:
-- 実行ファイル: `target/release/rdp-launcher.exe`
-- MSIインストーラー (英語): `target/release/bundle/msi/RDP Launcher_0.0.1_x64_en-US.msi`
-- MSIインストーラー (日本語): `target/release/bundle/msi/RDP Launcher_0.0.1_x64_ja-JP.msi`
+- 実行ファイル: `target/release/rdp-anchor.exe`
+- MSIインストーラー (英語): `target/release/bundle/msi/RDP Anchor_0.0.1_x64_en-US.msi`
+- MSIインストーラー (日本語): `target/release/bundle/msi/RDP Anchor_0.0.1_x64_ja-JP.msi`
 
 ZIP配布版を作成する場合:
 
@@ -116,8 +116,8 @@ ZIP配布版を作成する場合:
 powershell -ExecutionPolicy Bypass -File scripts/package-zip.ps1
 ```
 
-- ZIP: `target/release/bundle/zip/RDP-Launcher_0.0.1_x64.zip`
-- 内容: `rdp-launcher.exe`, `README.en_US.md`, `README.ja_JP.md`
+- ZIP: `target/release/bundle/zip/RDP-Anchor_0.0.1_x64.zip`
+- 内容: `rdp-anchor.exe`, `README.en_US.md`, `README.ja_JP.md`
 
 配布用READMEは `docs/README.template.md` から自動生成される。
 テンプレートを編集後、手動で生成する場合:
@@ -125,6 +125,23 @@ powershell -ExecutionPolicy Bypass -File scripts/package-zip.ps1
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/gen-readme.ps1
 ```
+
+### リリース
+
+ビルドのみ (バージョン変更なし):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/release.ps1
+```
+
+バージョン更新 + コミット + タグ + ビルド:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -Version 0.1.0
+```
+
+バージョンは以下のファイルで自動更新される:
+`Cargo.toml`, `tauri.conf.json`, `dist/index.html`, `scripts/package-zip.ps1`, `README.md`
 
 ### 開発モード
 
@@ -162,7 +179,7 @@ cargo tauri icon path/to/source-icon.png
 │  session.rs  EnumWindows で接続中セッション検出      │
 │                                                  │
 │  config.rs   JSON 設定の永続化                     │
-│              %APPDATA%/rdp-launcher/config.json   │
+│              %APPDATA%/rdp-anchor/config.json     │
 └─────────────────────────────────────────────────┘
 ```
 
