@@ -2,6 +2,9 @@
 
 **A GUI launcher for multi-monitor RDP connections that survive monitor ID changes across reboots.**
 
+![Main screen](screenshot-main.png)
+![Settings](screenshot-settings.png)
+
 ## What it solves
 
 Monitor IDs returned by `mstsc /l` (0, 1, 2...) can change after reboots or dock reconnections.

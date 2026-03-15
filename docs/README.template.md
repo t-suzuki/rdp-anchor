@@ -3,6 +3,9 @@
 en: **A GUI launcher for multi-monitor RDP connections that survive monitor ID changes across reboots.**
 ja: **再起動でモニターIDがずれても、意図通りのマルチモニターRDP接続ができるGUIランチャー。**
 *:
+*: ![Main screen](screenshot-main.png)
+*: ![Settings](screenshot-settings.png)
+*:
 en: ## What it solves
 ja: ## 何を解決するか
 *:

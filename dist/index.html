@@ -743,12 +743,10 @@ function renderGeneralTab() {
         <option value="en" ${currentLang === 'en' ? 'selected' : ''}>${t('general.langEn')}</option>
       </select>
     </div>
-    <div class="field" style="margin-top:16px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input type="checkbox" id="minimizeOnConnect" ${S.config.minimize_on_connect ? 'checked' : ''} onchange="toggleMinimizeOnConnect(this.checked)">
-        ${t('general.minimizeOnConnect')}
-      </label>
-    </div>`;
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:16px;font-size:13px;color:var(--text)">
+      <input type="checkbox" id="minimizeOnConnect" ${S.config.minimize_on_connect ? 'checked' : ''} onchange="toggleMinimizeOnConnect(this.checked)">
+      ${t('general.minimizeOnConnect')}
+    </label>`;
   document.getElementById('settingsFooter').innerHTML = '';
 }
 

@@ -2,6 +2,9 @@
 
 **再起動でモニターIDがずれても、意図通りのマルチモニターRDP接続ができるGUIランチャー。**
 
+![Main screen](screenshot-main.png)
+![Settings](screenshot-settings.png)
+
 ## 何を解決するか
 
 `mstsc /l` が返すモニターID (0, 1, 2...) は再起動やドック着脱で変わる。
