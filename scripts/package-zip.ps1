@@ -15,13 +15,18 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
+# Generate per-language READMEs from template
+Write-Host "Generating READMEs..."
+& powershell -ExecutionPolicy Bypass -File scripts/gen-readme.ps1
+
 # Clean and create staging directory
 if (Test-Path $stagingDir) { Remove-Item $stagingDir -Recurse -Force }
 New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
 # Copy files
 Copy-Item $exe $stagingDir/
-Copy-Item "README.md" $stagingDir/
+Copy-Item "docs/README.en_US.md" $stagingDir/
+Copy-Item "docs/README.ja_JP.md" $stagingDir/
 
 # Create ZIP
 $zipPath = "$outDir/$zipName"

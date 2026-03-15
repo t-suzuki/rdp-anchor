@@ -117,7 +117,14 @@ powershell -ExecutionPolicy Bypass -File scripts/package-zip.ps1
 ```
 
 - ZIP: `target/release/bundle/zip/RDP-Launcher_0.0.1_x64.zip`
-- 内容: `rdp-launcher.exe`, `README.md`
+- 内容: `rdp-launcher.exe`, `README.en_US.md`, `README.ja_JP.md`
+
+配布用READMEは `docs/README.template.md` から自動生成される。
+テンプレートを編集後、手動で生成する場合:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/gen-readme.ps1
+```
 
 ### 開発モード
 
