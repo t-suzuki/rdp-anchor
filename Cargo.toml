@@ -1,13 +1,13 @@
 [package]
-name = "rdp-launcher"
+name = "rdp-anchor"
 version = "0.0.1"
 edition = "2021"
-description = "RDP multi-monitor launcher that survives reboot ID changes"
+description = "RDP multi-monitor launcher that anchors connections to the right monitors"
 build = "build.rs"
-default-run = "rdp-launcher"
+default-run = "rdp-anchor"
 
 [lib]
-name = "rdp_launcher_lib"
+name = "rdp_anchor_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

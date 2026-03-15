@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "RDP Launcher",
+  "productName": "RDP Anchor",
   "version": "0.0.1",
-  "identifier": "com.tomato.rdplauncher",
+  "identifier": "com.tomato.rdpanchor",
   "build": {
     "frontendDist": "dist",
     "beforeBuildCommand": "",
@@ -12,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "RDP Launcher v0.0.1",
+        "title": "RDP Anchor v0.0.1",
         "width": 880,
         "height": 1280,
         "minWidth": 720,

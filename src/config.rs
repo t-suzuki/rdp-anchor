@@ -59,7 +59,7 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn config_dir() -> PathBuf {
         let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-        base.join("rdp-launcher")
+        base.join("rdp-anchor")
     }
 
     pub fn config_path() -> PathBuf {

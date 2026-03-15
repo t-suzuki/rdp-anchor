@@ -1,12 +1,12 @@
-# RDP Launcher ZIP packaging script
+# RDP Anchor ZIP packaging script
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/package-zip.ps1
 # Run after: cargo tauri build
 
 $ErrorActionPreference = "Stop"
 
 $version = "0.0.1"
-$exe = "target/release/rdp-launcher.exe"
-$zipName = "RDP-Launcher_${version}_x64.zip"
+$exe = "target/release/rdp-anchor.exe"
+$zipName = "RDP-Anchor_${version}_x64.zip"
 $outDir = "target/release/bundle/zip"
 $stagingDir = "$outDir/_staging"
 

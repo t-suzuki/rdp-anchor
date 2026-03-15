@@ -1,4 +1,4 @@
-*: # RDP Launcher
+*: # RDP Anchor
 *:
 en: **A GUI launcher for multi-monitor RDP connections that survive monitor ID changes across reboots.**
 ja: **再起動でモニターIDがずれても、意図通りのマルチモニターRDP接続ができるGUIランチャー。**
@@ -88,8 +88,8 @@ ja: 2. プロファイルの確認/調整
 en: ## Configuration
 ja: ## 設定ファイル
 *:
-en: Saved at `%APPDATA%/rdp-launcher/config.json`. Can be edited manually:
-ja: `%APPDATA%/rdp-launcher/config.json` に保存。手動編集も可能:
+en: Saved at `%APPDATA%/rdp-anchor/config.json`. Can be edited manually:
+ja: `%APPDATA%/rdp-anchor/config.json` に保存。手動編集も可能:
 *:
 *: ```json
 *: {
