@@ -32,13 +32,12 @@ pub fn get_monitors_for_connect() -> Result<(Vec<LiveMonitor>, bool), String> {
     {
         match capture_mstsc_silent() {
             Ok((_raw_text, mstsc_monitors, used_fallback)) => {
-                // Merge mstsc IDs into our monitors by matching coordinates
+                // Merge mstsc IDs into our monitors by matching position.
+                // Only (left, top) is compared because mstsc reports physical resolution
+                // while EnumDisplayMonitors reports logical (DPI-scaled) resolution.
                 for mon in &mut monitors {
                     if let Some(mstsc_mon) = mstsc_monitors.iter().find(|m| {
-                        m.left == mon.left
-                            && m.top == mon.top
-                            && m.width == mon.width
-                            && m.height == mon.height
+                        m.left == mon.left && m.top == mon.top
                     }) {
                         mon.mstsc_id = mstsc_mon.mstsc_id;
                     }
@@ -2607,5 +2606,64 @@ mod tests {
 
         let result = resolve_profile(&config, &profile, &live).unwrap();
         assert_eq!(result, "3,7");
+    }
+
+    /// Integration test: verify that mstsc /l BP capture and EnumDisplayMonitors
+    /// return the same monitors with matching coordinates.
+    /// Skips gracefully (with warning) when mstsc or a GUI session is unavailable.
+    #[test]
+    fn test_mstsc_matches_enum_display_monitors() {
+        // Step 1: EnumDisplayMonitors
+        let enum_monitors = match enumerate_display_monitors() {
+            Ok(m) if !m.is_empty() => m,
+            Ok(_) => {
+                eprintln!("WARNING: EnumDisplayMonitors returned no monitors (headless?). Skipping.");
+                return;
+            }
+            Err(e) => {
+                eprintln!("WARNING: EnumDisplayMonitors failed: {e}. Skipping.");
+                return;
+            }
+        };
+
+        // Step 2: mstsc /l via BP capture
+        let mstsc_monitors = match capture_mstsc_silent() {
+            Ok((_text, monitors, _fallback)) if !monitors.is_empty() => monitors,
+            Ok(_) => {
+                eprintln!("WARNING: mstsc capture returned no monitors. Skipping.");
+                return;
+            }
+            Err(e) => {
+                eprintln!("WARNING: mstsc capture failed: {e}. Skipping.");
+                return;
+            }
+        };
+
+        // Step 3: Compare — every mstsc monitor should have a position match
+        // in EnumDisplayMonitors. Resolution may differ due to DPI scaling
+        // (mstsc reports physical, EnumDisplayMonitors reports logical).
+        assert_eq!(
+            mstsc_monitors.len(),
+            enum_monitors.len(),
+            "Monitor count mismatch: mstsc={} vs EnumDisplayMonitors={}",
+            mstsc_monitors.len(),
+            enum_monitors.len()
+        );
+
+        for mm in &mstsc_monitors {
+            let matched = enum_monitors
+                .iter()
+                .find(|em| em.left == mm.left && em.top == mm.top);
+            assert!(
+                matched.is_some(),
+                "mstsc monitor ID={} at ({},{}) has no position match in EnumDisplayMonitors",
+                mm.mstsc_id, mm.left, mm.top
+            );
+        }
+
+        eprintln!(
+            "OK: {} monitors matched between mstsc /l and EnumDisplayMonitors",
+            mstsc_monitors.len()
+        );
     }
 }
